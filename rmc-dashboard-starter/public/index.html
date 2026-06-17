@@ -470,7 +470,7 @@
     }
 
     // ── Tabs ────────────────────────────────────────────────────────────────
-    function DashboardTab({ d }) {
+    function DashboardTab({ d, rangeLabel }) {
       const o = d.occupancy, l = d.leasing, f = d.financials, m = d.marketing, w = d.maintenance, ch = d.charts;
       const revData = (ch.monthlyRevenue || []).map((r) => ({ label: fmt.monthShort(r.month), gross: r.gross, net: r.net, expense: r.expense }));
       const occData = (ch.occupancyTrend || []).map((r) => ({ label: fmt.monthShort(r.month), rate: r.rate }));
@@ -548,14 +548,14 @@
             <DonutCard title="Lease composition" subtitle="Fixed-term vs month-to-month" drill="fixedLeases"
               data={{ "Fixed-term": l.fixedLeases, "Month-to-month": l.mtmLeases }}
               colors={{ "Fixed-term": C.gold, "Month-to-month": C.blue }} />
-            <ChartCard span={2} title="Leasing funnel" subtitle="Inquiry → converted (trailing window)" drill="applications">
+            <ChartCard span={2} title="Leasing funnel" subtitle={"Inquiry → converted · " + rangeLabel} drill="applications">
               <Funnel steps={funnelSteps} />
             </ChartCard>
           </div>
           <div style={{ ...gridAuto(180), marginTop: 12 }}>
             <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} sub={l.renewalsCount + " renewed"} drill="renewals" />
-            <KpiCard label="Move-ins" value={fmt.num(l.moveins)} sub="trailing 12 mo" drill="moveins" />
-            <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub="trailing 12 mo" drill="applications" />
+            <KpiCard label="Move-ins" value={fmt.num(l.moveins)} sub={rangeLabel} drill="moveins" />
+            <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub={rangeLabel} drill="applications" />
             <KpiCard label="Apps / Move-in" value={fmt.num(l.appsPerMovein)} drill="applications" />
             <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
           </div>
@@ -563,7 +563,7 @@
           {/* MARKETING & MAINTENANCE */}
           <SectionHeader title="Marketing & Maintenance" />
           <div style={gridCols(2)}>
-            <ChartCard title="Inquiries by source" subtitle="Trailing 12 months" drill="inquiries">
+            <ChartCard title="Inquiries by source" subtitle={rangeLabel} drill="inquiries">
               {sources.length ? <HBars rows={sources} color={C.blue} valueFmt={fmt.num} /> : <Empty label="No source data" />}
             </ChartCard>
             <DonutCard title="Work orders by priority" subtitle={w.openWorkOrders + " open"} drill="openWorkOrders"
@@ -571,8 +571,8 @@
               colors={{ Urgent: C.red, Normal: C.gold, Low: C.green }} />
           </div>
           <div style={{ ...gridAuto(180), marginTop: 12 }}>
-            <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} drill="inquiries" />
-            <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
+            <KpiCard label="Inquiries" value={fmt.num(m.inquiries)} sub={rangeLabel} drill="inquiries" />
+            <KpiCard label="Showings" value={fmt.num(m.showingsTotal)} sub={rangeLabel} drill="showings" />
             <KpiCard label="Show Completion" value={fmt.pct(m.showingCompletionRate)} tone="good" drill="showingsCompleted" />
             <KpiCard label="Urgent WOs" value={fmt.num(w.byPriority.urgent)} tone={w.byPriority.urgent ? "bad" : "good"} drill="woUrgent" />
             <KpiCard label="Unit Turns" value={fmt.num(w.byType.unitTurn)} drill="woUnitTurn" />
@@ -581,7 +581,7 @@
       );
     }
 
-    function LeasingTab({ d }) {
+    function LeasingTab({ d, rangeLabel }) {
       const m = d.marketing, l = d.leasing;
       const funnelSteps = [
         { label: "Inquiries", value: m.funnel.inquiries },
@@ -597,12 +597,12 @@
             <ChartCard title="Leasing funnel" subtitle="Inquiry to converted" drill="applications">
               <Funnel steps={funnelSteps} />
             </ChartCard>
-            <ChartCard title="Inquiries by source" subtitle="Trailing 12 months" drill="inquiries">
+            <ChartCard title="Inquiries by source" subtitle={rangeLabel} drill="inquiries">
               {sources.length ? <HBars rows={sources} color={C.blue} valueFmt={fmt.num} /> : <Empty label="No source data" />}
             </ChartCard>
           </div>
           <div style={gridCols(2)}>
-            <DonutCard title="Showings (30 days)" subtitle={m.showingsTotal + " scheduled"} drill="showings"
+            <DonutCard title={"Showings · " + rangeLabel} subtitle={m.showingsTotal + " scheduled"} drill="showings"
               data={{ Completed: m.showingsCompleted, "No-shows": m.noShows, Other: Math.max(m.showingsTotal - m.showingsCompleted - m.noShows, 0) }}
               colors={{ Completed: C.green, "No-shows": C.red, Other: C.amber }} />
             <DonutCard title="Lease composition" subtitle="Fixed-term vs month-to-month" drill="fixedLeases"
@@ -612,9 +612,9 @@
 
           <SectionHeader title="Pipeline Detail" />
           <div style={gridAuto(180)}>
-            <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} drill="inquiries" />
+            <KpiCard label="Inquiries" value={fmt.num(m.inquiries)} sub={rangeLabel} drill="inquiries" />
             <KpiCard label="Active Prospects" value={fmt.num(m.activeProspects)} drill="activeProspects" />
-            <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
+            <KpiCard label="Showings" value={fmt.num(m.showingsTotal)} sub={rangeLabel} drill="showings" />
             <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" drill="showingsCompleted" />
             <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone={m.noShows ? "warn" : "good"} drill="noShows" />
             <KpiCard label="Completion Rate" value={fmt.pct(m.showingCompletionRate)} drill="showings" />
@@ -708,6 +708,7 @@
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [tab, setTab] = useState("dashboard");
+      const [range, setRange] = useState("30d");
       const [syncing, setSyncing] = useState(false);
       const [activeDrill, setActiveDrill] = useState(null);
       const [drillData, setDrillData] = useState(null);
@@ -715,13 +716,13 @@
 
       const load = () => {
         setLoading(true);
-        fetch("/api/dashboard")
+        fetch("/api/dashboard?range=" + encodeURIComponent(range))
           .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
           .then((j) => { setData(j); setError(null); })
           .catch((e) => setError(e.message))
           .finally(() => setLoading(false));
       };
-      useEffect(load, []);
+      useEffect(load, [range]);
 
       const sync = () => {
         setSyncing(true);
@@ -738,12 +739,21 @@
         { id: "leasing", label: "Leasing & Marketing" },
         { id: "ceo", label: "CEO View" },
       ];
+      const rangeOptions = [
+        { id: "15d", label: "15D", full: "Last 15 days" },
+        { id: "30d", label: "30D", full: "Last 30 days" },
+        { id: "90d", label: "90D", full: "Last 90 days" },
+        { id: "6mo", label: "6M", full: "Last 6 months" },
+        { id: "12mo", label: "12M", full: "Last 12 months" },
+        { id: "all", label: "All", full: "All time" },
+      ];
+      const rangeLabel = (rangeOptions.find((r) => r.id === range) || {}).full || "Last 30 days";
 
       const openDrill = (key) => {
         setActiveDrill(key);
         setDrillData(null);
         setDrillLoading(true);
-        fetch("/api/drilldown/" + encodeURIComponent(key))
+        fetch("/api/drilldown/" + encodeURIComponent(key) + "?range=" + encodeURIComponent(range))
           .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
           .then((j) => setDrillData(j))
           .catch(() => setDrillData({ title: "Could not load records", cols: [], rows: [] }))
@@ -769,13 +779,26 @@
               </div>
             </header>
 
-            <nav style={{ display: "flex", gap: 0, padding: "0 26px", background: C.card, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, zIndex: 30 }}>
-              {tabs.map((t) => (
-                <button key={t.id} onClick={() => setTab(t.id)}
-                  style={{ background: "none", border: "none", padding: "13px 18px", fontSize: 13, fontWeight: tab === t.id ? 600 : 500, color: tab === t.id ? C.black : C.muted, borderBottom: "2px solid " + (tab === t.id ? C.gold : "transparent"), marginBottom: -1 }}>
-                  {t.label}
-                </button>
-              ))}
+            <nav style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "0 26px", background: C.card, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, zIndex: 30, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 0 }}>
+                {tabs.map((t) => (
+                  <button key={t.id} onClick={() => setTab(t.id)}
+                    style={{ background: "none", border: "none", padding: "13px 18px", fontSize: 13, fontWeight: tab === t.id ? 600 : 500, color: tab === t.id ? C.black : C.muted, borderBottom: "2px solid " + (tab === t.id ? C.gold : "transparent"), marginBottom: -1 }}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "6px 0" }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: "uppercase", letterSpacing: 0.4 }}>Date range</span>
+                <div style={{ display: "inline-flex", background: C.bg || "#F1ECE0", border: "1px solid " + C.border, borderRadius: 8, padding: 2 }}>
+                  {rangeOptions.map((r) => (
+                    <button key={r.id} onClick={() => setRange(r.id)} title={r.full}
+                      style={{ background: range === r.id ? C.gold : "transparent", color: range === r.id ? "#fff" : C.muted, border: "none", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: range === r.id ? 600 : 500, cursor: "pointer", transition: "background 0.15s" }}>
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </nav>
 
             <main style={{ flex: 1, padding: "4px 26px 48px", maxWidth: 1320, width: "100%", margin: "0 auto" }}>
@@ -789,8 +812,8 @@
                 </div>
               ) : data ? (
                 <>
-                  {tab === "dashboard" && <DashboardTab d={data.dashboard} />}
-                  {tab === "leasing" && <LeasingTab d={data.dashboard} />}
+                  {tab === "dashboard" && <DashboardTab d={data.dashboard} rangeLabel={rangeLabel} />}
+                  {tab === "leasing" && <LeasingTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "ceo" && <CeoTab d={data.dashboard} />}
                   {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
                     <div style={{ marginTop: 20, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.amber, borderRadius: 10, padding: 18 }}>

@@ -13,4 +13,4 @@ description: How /api/dashboard caching works and why early screenshots can stil
 
 Drilldowns are lazy: each KPI tile / chart card fetches `GET /api/drilldown/:key` on click. Keys index a fixed server-side registry (`drillRegistry()` / `getDrilldown(key)` in aggregator.js) — never interpolate the key into SQL.
 
-Frontend is a SINGLE-file React 18 + Babel CDN app (`public/index.html`). It mimics the Limehouse example's chart-rich information design (few hero tiles per section + inline-SVG LineChart/DualBars/Donut/HBars/Funnel/Sparkline) in RMC's gold/cream brand. CEO tab gate is client-side only (password `RMCRTCS`) — a soft UI gate, not real access control.
+Frontend is a SINGLE-file React 18 + Babel CDN app (`public/index.html`). It mimics the Limehouse example's chart-rich information design (few hero tiles per section + inline-SVG LineChart/DualBars/Donut/HBars/Funnel/Sparkline) in RMC's gold/cream brand. CEO tab gate is client-side only (a hardcoded password compared in `index.html`) — a soft UI gate, not real access control. Do not record the literal password here.

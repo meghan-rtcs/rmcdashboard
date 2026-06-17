@@ -32,6 +32,42 @@ function many(sql, params = []) {
   }
 }
 
+// ── Date-range window ───────────────────────────────────────────────────────
+// A global filter lets the user scope time-windowed (activity) metrics to a
+// preset range. Point-in-time metrics (current occupancy, delinquency, open
+// work orders, etc.) ignore it. Values are drawn from a fixed whitelist, so
+// they are safe to interpolate into SQL.
+const RANGE_MODIFIERS = {
+  "15d": "-15 days",
+  "30d": "-30 days",
+  "90d": "-90 days",
+  "6mo": "-6 months",
+  "12mo": "-12 months",
+  all: null,
+};
+const RANGE_LABELS = {
+  "15d": "last 15 days",
+  "30d": "last 30 days",
+  "90d": "last 90 days",
+  "6mo": "last 6 months",
+  "12mo": "last 12 months",
+  all: "all time",
+};
+export const DEFAULT_RANGE = "30d";
+export function normalizeRange(range) {
+  return Object.prototype.hasOwnProperty.call(RANGE_MODIFIERS, range)
+    ? range
+    : DEFAULT_RANGE;
+}
+// SQL boolean clause: is `col` within the selected range?
+function within(col, range) {
+  const mod = RANGE_MODIFIERS[normalizeRange(range)];
+  return mod ? `${col} >= date('now','${mod}')` : "1=1";
+}
+function rangeLabel(range) {
+  return RANGE_LABELS[normalizeRange(range)];
+}
+
 // ── Sections ──────────────────────────────────────────────────────────────
 
 function buildOccupancy() {
@@ -72,15 +108,15 @@ function buildOccupancy() {
   };
 }
 
-function buildLeasing() {
+function buildLeasing(range) {
   const renewalDenom = num(
     one(
-      "SELECT COUNT(*) c FROM renewals WHERE lease_end >= date('now','-12 months')"
+      `SELECT COUNT(*) c FROM renewals WHERE ${within("lease_end", range)}`
     ).c
   );
   const renewalsCount = num(
     one(
-      "SELECT COUNT(*) c FROM renewals WHERE renewal_status = 'Renewed' AND lease_end >= date('now','-12 months')"
+      `SELECT COUNT(*) c FROM renewals WHERE renewal_status = 'Renewed' AND ${within("lease_end", range)}`
     ).c
   );
   const renewalRate = renewalDenom
@@ -97,12 +133,12 @@ function buildLeasing() {
   );
   const appsSubmitted = num(
     one(
-      "SELECT COUNT(*) c FROM applications WHERE received_date >= date('now','-12 months')"
+      `SELECT COUNT(*) c FROM applications WHERE ${within("received_date", range)}`
     ).c
   );
   const moveins = num(
     one(
-      "SELECT COUNT(*) c FROM units WHERE move_in_date >= date('now','-12 months')"
+      `SELECT COUNT(*) c FROM units WHERE ${within("move_in_date", range)}`
     ).c
   );
   const appsPerMovein = moveins ? round(appsSubmitted / moveins) : 0;
@@ -184,10 +220,10 @@ async function buildFinancials() {
   };
 }
 
-function buildMarketing() {
+function buildMarketing(range) {
   const inquiries = num(
     one(
-      "SELECT COUNT(*) c FROM guest_cards WHERE received_date >= date('now','-30 days')"
+      `SELECT COUNT(*) c FROM guest_cards WHERE ${within("received_date", range)}`
     ).c
   );
   const activeProspects = num(
@@ -197,52 +233,56 @@ function buildMarketing() {
   );
   const showingsTotal = num(
     one(
-      "SELECT COUNT(*) c FROM showings WHERE showing_date >= date('now','-30 days')"
+      `SELECT COUNT(*) c FROM showings WHERE ${within("showing_date", range)}`
     ).c
   );
   const showingsCompleted = num(
-    one("SELECT COUNT(*) c FROM showings WHERE status = 'Completed'").c
+    one(
+      `SELECT COUNT(*) c FROM showings WHERE status = 'Completed' AND ${within("showing_date", range)}`
+    ).c
   );
   const showingsScheduleable = num(
     one(
-      "SELECT COUNT(*) c FROM showings WHERE status NOT IN ('Canceled','Prospect Canceled','Canceled (Unconfirmed)')"
+      `SELECT COUNT(*) c FROM showings WHERE status NOT IN ('Canceled','Prospect Canceled','Canceled (Unconfirmed)') AND ${within("showing_date", range)}`
     ).c
   );
   const showingCompletionRate = showingsScheduleable
     ? round((showingsCompleted / showingsScheduleable) * 100)
     : 0;
   const noShows = num(
-    one("SELECT COUNT(*) c FROM showings WHERE status = 'No Show'").c
+    one(
+      `SELECT COUNT(*) c FROM showings WHERE status = 'No Show' AND ${within("showing_date", range)}`
+    ).c
   );
   const unitsOnMarket = num(one("SELECT COUNT(*) c FROM vacancies").c);
 
   const inquiriesBySource = many(
-    "SELECT COALESCE(NULLIF(source,''),'Unknown') source, COUNT(*) count FROM guest_cards WHERE received_date >= date('now','-12 months') GROUP BY source ORDER BY count DESC LIMIT 12"
+    `SELECT COALESCE(NULLIF(source,''),'Unknown') source, COUNT(*) count FROM guest_cards WHERE ${within("received_date", range)} GROUP BY source ORDER BY count DESC LIMIT 12`
   ).map((r) => ({ source: r.source, count: num(r.count) }));
 
-  // Conversion funnel over a consistent trailing-12-month window so each stage
-  // is a strict subset of the one above it. "Approved" = applications that
-  // passed screening (approved, now converting, or fully converted/leased);
-  // "Converted" = leases signed.
+  // Conversion funnel over the selected date window so each stage is a strict
+  // subset of the one above it. "Approved" = applications that passed screening
+  // (approved, now converting, or fully converted/leased); "Converted" = leases
+  // signed.
   const funnel = {
     inquiries: num(
       one(
-        "SELECT COUNT(*) c FROM guest_cards WHERE received_date >= date('now','-12 months')"
+        `SELECT COUNT(*) c FROM guest_cards WHERE ${within("received_date", range)}`
       ).c
     ),
     applications: num(
       one(
-        "SELECT COUNT(*) c FROM applications WHERE received_date >= date('now','-12 months')"
+        `SELECT COUNT(*) c FROM applications WHERE ${within("received_date", range)}`
       ).c
     ),
     approved: num(
       one(
-        "SELECT COUNT(*) c FROM applications WHERE status IN ('Approved','Converting','Converted') AND received_date >= date('now','-12 months')"
+        `SELECT COUNT(*) c FROM applications WHERE status IN ('Approved','Converting','Converted') AND ${within("received_date", range)}`
       ).c
     ),
     converted: num(
       one(
-        "SELECT COUNT(*) c FROM applications WHERE status = 'Converted' AND received_date >= date('now','-12 months')"
+        `SELECT COUNT(*) c FROM applications WHERE status = 'Converted' AND ${within("received_date", range)}`
       ).c
     ),
   };
@@ -373,7 +413,7 @@ async function buildCharts() {
 // Raw records behind every KPI tile, keyed by the same drill key the frontend
 // passes on each card. Each entry: { title, cols:[{key,label,money?,pct?}], rows }.
 
-function drillRegistry() {
+function drillRegistry(range) {
   const dd = {};
   const make = (title, cols, sql) => ({ title, cols, sql });
 
@@ -469,28 +509,28 @@ function drillRegistry() {
     `SELECT property_name, unit, status, days_vacant, market_rent, advertised_rent, available_date FROM vacancies ORDER BY days_vacant DESC LIMIT ${LIM}`);
 
   // Leasing
-  dd.renewals = make("Renewals (last 12 mo)", renCols,
-    `SELECT property_name, unit, tenant_name, renewal_status, lease_end, previous_rent, new_rent FROM renewals WHERE lease_end >= date('now','-12 months') ORDER BY lease_end DESC LIMIT ${LIM}`);
+  dd.renewals = make(`Renewals (${rangeLabel(range)})`, renCols,
+    `SELECT property_name, unit, tenant_name, renewal_status, lease_end, previous_rent, new_rent FROM renewals WHERE ${within("lease_end", range)} ORDER BY lease_end DESC LIMIT ${LIM}`);
   dd.mtm = make("Month-to-Month Leases", renCols,
     `SELECT property_name, unit, tenant_name, renewal_status, lease_end, previous_rent, new_rent FROM renewals WHERE renewal_status = 'Month To Month' LIMIT ${LIM}`);
   dd.fixedLeases = make("Active Fixed Leases", unitCols,
     `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE lease_to >= date('now') ORDER BY lease_to LIMIT ${LIM}`);
-  dd.applications = make("Applications (last 12 mo)", appCols,
-    `SELECT property_name, unit, applicant_name, status, received_date, decision_date FROM applications WHERE received_date >= date('now','-12 months') ORDER BY received_date DESC LIMIT ${LIM}`);
-  dd.moveins = make("Move-ins (last 12 mo)", unitCols,
-    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, move_in_date AS lease_to FROM units WHERE move_in_date >= date('now','-12 months') ORDER BY move_in_date DESC LIMIT ${LIM}`);
+  dd.applications = make(`Applications (${rangeLabel(range)})`, appCols,
+    `SELECT property_name, unit, applicant_name, status, received_date, decision_date FROM applications WHERE ${within("received_date", range)} ORDER BY received_date DESC LIMIT ${LIM}`);
+  dd.moveins = make(`Move-ins (${rangeLabel(range)})`, unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, move_in_date AS lease_to FROM units WHERE ${within("move_in_date", range)} ORDER BY move_in_date DESC LIMIT ${LIM}`);
 
   // Marketing
-  dd.inquiries = make("Inquiries (last 30 days)", gcCols,
-    `SELECT prospect_name, property_name, source, status, received_date, assigned_user FROM guest_cards WHERE received_date >= date('now','-30 days') ORDER BY received_date DESC LIMIT ${LIM}`);
+  dd.inquiries = make(`Inquiries (${rangeLabel(range)})`, gcCols,
+    `SELECT prospect_name, property_name, source, status, received_date, assigned_user FROM guest_cards WHERE ${within("received_date", range)} ORDER BY received_date DESC LIMIT ${LIM}`);
   dd.activeProspects = make("Active Prospects", gcCols,
     `SELECT prospect_name, property_name, source, status, received_date, assigned_user FROM guest_cards WHERE LOWER(status) IN ('active','prequalified','waitlisted') ORDER BY received_date DESC LIMIT ${LIM}`);
-  dd.showings = make("Showings (last 30 days)", showCols,
-    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE showing_date >= date('now','-30 days') ORDER BY showing_date DESC LIMIT ${LIM}`);
+  dd.showings = make(`Showings (${rangeLabel(range)})`, showCols,
+    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE ${within("showing_date", range)} ORDER BY showing_date DESC LIMIT ${LIM}`);
   dd.showingsCompleted = make("Completed Showings", showCols,
-    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE status = 'Completed' ORDER BY showing_date DESC LIMIT ${LIM}`);
+    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE status = 'Completed' AND ${within("showing_date", range)} ORDER BY showing_date DESC LIMIT ${LIM}`);
   dd.noShows = make("No-Show Showings", showCols,
-    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE status = 'No Show' ORDER BY showing_date DESC LIMIT ${LIM}`);
+    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE status = 'No Show' AND ${within("showing_date", range)} ORDER BY showing_date DESC LIMIT ${LIM}`);
 
   // Financials
   dd.delinquency = make("Delinquent Accounts", delCols,
@@ -542,7 +582,7 @@ function drillRegistry() {
 }
 
 // Returns a single drilldown { title, cols, rows } for the given key, or null.
-export async function getDrilldown(key) {
+export async function getDrilldown(key, range) {
   if (key === "income" || key === "grossIncome" || key === "netIncome") {
     const charts = await buildCharts();
     return {
@@ -556,17 +596,17 @@ export async function getDrilldown(key) {
       rows: (charts.monthlyRevenue || []).slice().reverse(),
     };
   }
-  const def = drillRegistry()[key];
+  const def = drillRegistry(range)[key];
   if (!def) return null;
   return { title: def.title, cols: def.cols, rows: def.sql ? many(def.sql) : [] };
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────
 
-export async function buildDashboard() {
+export async function buildDashboard(range) {
   const occupancy = buildOccupancy();
-  const leasing = buildLeasing();
-  const marketing = buildMarketing();
+  const leasing = buildLeasing(range);
+  const marketing = buildMarketing(range);
   const maintenance = buildMaintenance();
   const [financials, charts] = await Promise.all([
     buildFinancials(),

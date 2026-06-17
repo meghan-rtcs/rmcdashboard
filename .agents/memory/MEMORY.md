@@ -1,2 +1,3 @@
 - [AppFolio report names](appfolio-report-names.md) — report endpoints are account-specific; many plausible names 400, probe before trusting. Confirmed working set + key fields.
 - [RMC dashboard load & caching](rmc-dashboard-load.md) — /api/dashboard is cached (5min TTL, single-flight, cleared on sync); first build ~2s, rest instant. Chart-rich single-file React frontend; drilldowns lazy via /api/drilldown/:key registry.
+- [RMC date-range filter](rmc-date-filter.md) — global filter scopes only activity metrics (leasing/marketing flows) not point-in-time; range→SQL via whitelist within(); normalizeRange() before cache keying.

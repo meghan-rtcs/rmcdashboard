@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getDb, query } from "./lib/db.js";
 import { syncAll } from "./lib/sync.js";
+import { normalizeRange } from "./lib/aggregator.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -19,33 +20,35 @@ getDb();
 // The dashboard is expensive to build (live AppFolio report calls), and its data
 // only changes after a sync. Cache the built payload in memory with a short TTL
 // and clear it whenever a sync runs, so repeat page loads are instant.
-let dashboardCache = null;
-let dashboardCacheAt = 0;
-let dashboardPromise = null;
+// Cache is keyed by the selected date range so each window keeps its own entry.
+const dashboardCache = new Map(); // range -> { data, at }
+const dashboardPromise = new Map(); // range -> in-flight promise
 const DASHBOARD_TTL_MS = 5 * 60 * 1000;
-function clearDashboardCache() { dashboardCache = null; dashboardCacheAt = 0; }
+function clearDashboardCache() { dashboardCache.clear(); dashboardPromise.clear(); }
 
-// Build the dashboard, coalescing concurrent cache-misses into a single
-// in-flight build so a burst of requests doesn't fan out into many expensive
-// AppFolio report calls.
-function getDashboard() {
-  if (dashboardCache && Date.now() - dashboardCacheAt < DASHBOARD_TTL_MS) {
-    return Promise.resolve(dashboardCache);
+// Build the dashboard for a given range, coalescing concurrent cache-misses
+// into a single in-flight build so a burst of requests doesn't fan out into
+// many expensive AppFolio report calls.
+function getDashboard(range) {
+  const hit = dashboardCache.get(range);
+  if (hit && Date.now() - hit.at < DASHBOARD_TTL_MS) {
+    return Promise.resolve(hit.data);
   }
-  if (dashboardPromise) return dashboardPromise;
-  dashboardPromise = (async () => {
+  if (dashboardPromise.has(range)) return dashboardPromise.get(range);
+  const p = (async () => {
     const { buildDashboard } = await import("./lib/aggregator.js");
-    const data = await buildDashboard();
-    dashboardCache = data;
-    dashboardCacheAt = Date.now();
+    const data = await buildDashboard(range);
+    dashboardCache.set(range, { data, at: Date.now() });
     return data;
-  })().finally(() => { dashboardPromise = null; });
-  return dashboardPromise;
+  })().finally(() => { dashboardPromise.delete(range); });
+  dashboardPromise.set(range, p);
+  return p;
 }
 
 app.get("/api/dashboard", async (req, res) => {
   try {
-    const data = await getDashboard();
+    const range = normalizeRange(String(req.query.range || "30d"));
+    const data = await getDashboard(range);
     res.json(data);
   } catch (err) {
     console.error("[api] Dashboard error:", err);
@@ -57,7 +60,7 @@ app.get("/api/dashboard", async (req, res) => {
 app.get("/api/drilldown/:key", async (req, res) => {
   try {
     const { getDrilldown } = await import("./lib/aggregator.js");
-    const dd = await getDrilldown(req.params.key);
+    const dd = await getDrilldown(req.params.key, normalizeRange(String(req.query.range || "30d")));
     if (!dd) return res.status(404).json({ error: "Unknown drilldown: " + req.params.key });
     res.json(dd);
   } catch (err) {
