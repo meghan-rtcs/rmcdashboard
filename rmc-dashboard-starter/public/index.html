@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RMC Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
@@ -11,8 +13,8 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #FFFAF2;
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #FBF7F0;
       color: #1A1A1A;
       -webkit-font-smoothing: antialiased;
     }
@@ -25,63 +27,78 @@
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
     const C = {
-      gold: "#F5A623",
-      darkGold: "#D48B1A",
+      gold: "#E0A028",
+      darkGold: "#C2861A",
       black: "#1A1A1A",
-      bg: "#FFFAF2",
+      ink: "#2A2620",
+      bg: "#FBF7F0",
       card: "#FFFFFF",
-      border: "#E8E0D4",
-      muted: "#6B6B6B",
+      border: "#EBE3D6",
+      grid: "#EFE9DD",
+      muted: "#8A8270",
       green: "#2D8C3E",
       red: "#C0392B",
       amber: "#D68910",
+      blue: "#2471A3",
+      purple: "#7D3C98",
     };
+
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
     const fmt = {
       num: (v) => (v == null ? "—" : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })),
       pct: (v) => (v == null ? "—" : Number(v).toFixed(1) + "%"),
       money: (v) =>
-        v == null
-          ? "—"
-          : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }),
+        v == null ? "—" : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }),
       money2: (v) =>
-        v == null
-          ? "—"
-          : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-      month: (m) => {
+        v == null ? "—" : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      moneyAxis: (v) => {
+        const n = Math.abs(Number(v) || 0);
+        if (n >= 1000000) return "$" + (v / 1000000).toFixed(1) + "M";
+        if (n >= 1000) return "$" + Math.round(v / 1000) + "k";
+        return "$" + Math.round(v || 0);
+      },
+      monthShort: (m) => {
         if (!m) return "";
-        const [y, mo] = m.split("-");
-        const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-        return names[Number(mo) - 1] + " " + y.slice(2);
+        const parts = String(m).split("-");
+        return MONTHS[Number(parts[1]) - 1] || m;
       },
     };
 
-    function Card({ children, style }) {
+    const DrillContext = React.createContext(null);
+    const useDrill = () => React.useContext(DrillContext);
+
+    // ── Layout primitives ─────────────────────────────────────────────────────
+    function SectionHeader({ title, subtitle, right }) {
       return (
-        <div
-          style={{
-            background: C.card,
-            border: "1px solid " + C.border,
-            borderRadius: 12,
-            padding: 18,
-            boxShadow: "0 1px 2px rgba(26,26,26,0.04)",
-            ...style,
-          }}
-        >
-          {children}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "26px 0 12px", padding: "0 2px" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: C.black }}>{title}</div>
+          {subtitle && <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 500 }}>{subtitle}</div>}
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+          {right}
         </div>
       );
     }
 
-    const DrillContext = React.createContext(null);
+    const gridCols = (cols, gap = 12) => ({
+      display: "grid",
+      gridTemplateColumns: "repeat(" + cols + ", minmax(0, 1fr))",
+      gap,
+    });
+    const gridAuto = (min = 180, gap = 12) => ({
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(" + min + "px, 1fr))",
+      gap,
+    });
 
-    function KpiCard({ label, value, unit, sub, tone, drill }) {
-      const ctx = React.useContext(DrillContext);
+    // ── KPI tile (compact, optional sparkline, drillable) ─────────────────────
+    function KpiCard({ label, value, unit, sub, tone, drill, spark, sparkColor, big }) {
+      const ctx = useDrill();
       const [hover, setHover] = useState(false);
-      const accent = tone === "good" ? C.green : tone === "bad" ? C.red : tone === "warn" ? C.amber : C.gold;
+      const accent = tone === "good" ? C.green : tone === "bad" ? C.red : tone === "warn" ? C.amber : tone === "info" ? C.blue : C.gold;
       const clickable = !!drill && !!ctx;
       return (
         <div
@@ -90,39 +107,318 @@
           onMouseLeave={() => setHover(false)}
           style={{
             background: C.card,
-            border: "1px solid " + (clickable && hover ? accent : C.border),
-            borderLeft: "4px solid " + accent,
+            border: "1px solid " + (clickable && hover ? "#D9C9A6" : C.border),
             borderRadius: 10,
-            padding: "16px 18px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            minHeight: 96,
+            padding: big ? "16px 18px" : "13px 15px",
+            display: "flex", flexDirection: "column", gap: 6,
             cursor: clickable ? "pointer" : "default",
-            boxShadow: clickable && hover ? "0 3px 10px rgba(26,26,26,0.10)" : "none",
-            transition: "box-shadow .12s, border-color .12s",
-            position: "relative",
+            boxShadow: clickable && hover ? "0 4px 14px rgba(224,160,40,0.12)" : "0 1px 2px rgba(26,26,26,0.03)",
+            transition: "box-shadow .14s, border-color .14s, transform .14s",
+            transform: clickable && hover ? "translateY(-1px)" : "none",
+            position: "relative", overflow: "hidden",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-            <span style={{ fontSize: 12, color: C.muted, fontWeight: 600, letterSpacing: 0.3, textTransform: "uppercase" }}>
-              {label}
-            </span>
-            {clickable ? (
-              <span style={{ fontSize: 11, color: hover ? accent : C.muted, fontWeight: 700, whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 3 }}>
-                View ↗
-              </span>
-            ) : null}
+            <span style={{ fontSize: 9.5, color: C.muted, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", lineHeight: 1.3 }}>{label}</span>
+            {clickable && <span style={{ fontSize: 13, color: hover ? accent : "#CFC6B2", lineHeight: 1 }}>›</span>}
           </div>
-          <span style={{ fontSize: 28, fontWeight: 700, color: C.black, lineHeight: 1.1 }}>
-            {value}
-            {unit && unit !== "$" ? <span style={{ fontSize: 16, color: C.muted, marginLeft: 3 }}>{unit}</span> : null}
-          </span>
-          {sub ? <span style={{ fontSize: 12.5, color: C.muted }}>{sub}</span> : null}
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontSize: big ? 34 : 27, fontWeight: 300, color: accent, lineHeight: 1, letterSpacing: "-1px", fontVariantNumeric: "tabular-nums" }}>
+              {value}
+              {unit && unit !== "$" ? <span style={{ fontSize: "0.5em", color: C.muted, marginLeft: 2, fontWeight: 400 }}>{unit}</span> : null}
+            </span>
+            {spark && spark.length > 1 ? <Sparkline data={spark} color={sparkColor || accent} /> : null}
+          </div>
+          {sub ? <span style={{ fontSize: 11.5, color: C.muted }}>{sub}</span> : null}
         </div>
       );
     }
 
+    function ChartCard({ title, subtitle, legend, children, drill, span }) {
+      const ctx = useDrill();
+      const [hover, setHover] = useState(false);
+      const clickable = !!drill && !!ctx;
+      return (
+        <div
+          onClick={clickable ? () => ctx.open(drill) : undefined}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          style={{
+            background: C.card,
+            border: "1px solid " + (clickable && hover ? "#D9C9A6" : C.border),
+            borderRadius: 10,
+            padding: "15px 17px",
+            boxShadow: clickable && hover ? "0 4px 14px rgba(224,160,40,0.10)" : "0 1px 2px rgba(26,26,26,0.03)",
+            transition: "box-shadow .14s, border-color .14s",
+            cursor: clickable ? "pointer" : "default",
+            gridColumn: span ? "span " + span : undefined,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: C.muted }}>{title}</div>
+              {subtitle && <div style={{ fontSize: 11.5, color: C.muted, marginTop: 3 }}>{subtitle}</div>}
+            </div>
+            {legend}
+          </div>
+          {children}
+        </div>
+      );
+    }
+
+    function LegendInline({ items }) {
+      return (
+        <div style={{ display: "flex", gap: 10, fontSize: 10.5, color: C.muted, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {items.map((it) => (
+            <span key={it.l} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 8, height: 8, background: it.c, borderRadius: 2 }} /> {it.l}
+            </span>
+          ))}
+        </div>
+      );
+    }
+
+    function Empty({ label }) {
+      return <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12.5 }}>{label || "No data yet"}</div>;
+    }
+
+    // ── Charts (inline SVG, no deps) ──────────────────────────────────────────
+    function Sparkline({ data, color = C.gold, width = 62, height = 22, fill = true }) {
+      if (!data || data.length < 2) return null;
+      const min = Math.min(...data), max = Math.max(...data);
+      const range = max - min || 1;
+      const xStep = width / (data.length - 1);
+      const pts = data.map((v, i) => [i * xStep, height - ((v - min) / range) * (height - 4) - 2]);
+      const path = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+      const area = path + " L" + width + "," + height + " L0," + height + " Z";
+      return (
+        <svg width={width} height={height} style={{ display: "block", overflow: "visible", flexShrink: 0 }}>
+          {fill && <path d={area} fill={color} fillOpacity="0.12" />}
+          <path d={path} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="2.2" fill={color} />
+        </svg>
+      );
+    }
+
+    function LineChart({ data, series, height = 150, yFmt = (v) => v }) {
+      const padding = { l: 46, r: 12, t: 10, b: 22 };
+      const W = 600, H = height;
+      const svgRef = useRef(null);
+      const [hoverIdx, setHoverIdx] = useState(null);
+      if (!data || !data.length) return <Empty />;
+      const labels = data.map((d) => d.label || "");
+      const all = data.flatMap((d) => series.map((s) => d[s.key])).filter((v) => v != null && Number.isFinite(v));
+      const max = all.length ? Math.max(...all) : 1;
+      const min = all.length ? Math.min(...all) : 0;
+      const yMin = Math.floor(Math.min(min * 0.96, min));
+      const yMax = Math.ceil(Math.max(max * 1.04, max + 1));
+      const range = yMax - yMin || 1;
+      const innerW = W - padding.l - padding.r;
+      const innerH = H - padding.t - padding.b;
+      const xStep = innerW / Math.max(data.length - 1, 1);
+      const yScale = (v) => padding.t + innerH - ((v - yMin) / range) * innerH;
+      const xScale = (i) => padding.l + i * xStep;
+      const ticks = [0, 0.33, 0.66, 1].map((t) => yMin + range * t);
+
+      function onMove(e) {
+        const svg = svgRef.current; if (!svg) return;
+        const rect = svg.getBoundingClientRect();
+        const vbX = ((e.clientX - rect.left) / rect.width) * W;
+        const idx = Math.round((vbX - padding.l) / xStep);
+        setHoverIdx(Math.max(0, Math.min(data.length - 1, idx)));
+      }
+
+      let tooltip = null;
+      if (hoverIdx != null && data[hoverIdx]) {
+        const row = data[hoverIdx];
+        const vis = series.filter((s) => row[s.key] != null && Number.isFinite(row[s.key]));
+        if (vis.length) {
+          const xPct = (xScale(hoverIdx) / W) * 100;
+          const right = xPct > 60;
+          tooltip = (
+            <div style={{
+              position: "absolute",
+              left: right ? "auto" : "calc(" + xPct + "% + 8px)",
+              right: right ? "calc(" + (100 - xPct) + "% + 8px)" : "auto",
+              top: 4, background: C.ink, color: "#fff", padding: "7px 10px", borderRadius: 6,
+              fontSize: 11.5, lineHeight: 1.5, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.2)", pointerEvents: "none", zIndex: 5,
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "#C9C2B0", marginBottom: 4 }}>{labels[hoverIdx]}</div>
+              {vis.map((s, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />
+                  <span style={{ flex: 1 }}>{s.name || s.key}</span>
+                  <span style={{ fontWeight: 600 }}>{yFmt(row[s.key])}</span>
+                </div>
+              ))}
+            </div>
+          );
+        }
+      }
+
+      return (
+        <div style={{ position: "relative", width: "100%" }}>
+          <svg ref={svgRef} viewBox={"0 0 " + W + " " + H} preserveAspectRatio="none"
+            onMouseMove={onMove} onMouseLeave={() => setHoverIdx(null)}
+            style={{ width: "100%", height: H, display: "block", overflow: "visible", cursor: "crosshair" }}>
+            {ticks.map((t, i) => (
+              <line key={i} x1={padding.l} y1={yScale(t)} x2={W - padding.r} y2={yScale(t)}
+                stroke={C.grid} strokeWidth="1" strokeDasharray={i === 0 ? "0" : "2 3"} />
+            ))}
+            {series.map((s, si) => {
+              const pts = data.map((d, i) => (d[s.key] != null && Number.isFinite(d[s.key])) ? [xScale(i), yScale(d[s.key])] : null).filter(Boolean);
+              if (!pts.length) return null;
+              const path = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+              return (
+                <g key={si}>
+                  <path d={path} fill="none" stroke={s.color} strokeWidth={s.width || 2} strokeLinecap="round" strokeLinejoin="round" />
+                  {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={i === pts.length - 1 ? 2.6 : 1.5} fill={s.color} />)}
+                </g>
+              );
+            })}
+            {hoverIdx != null && (
+              <g pointerEvents="none">
+                <line x1={xScale(hoverIdx)} y1={padding.t} x2={xScale(hoverIdx)} y2={H - padding.b} stroke={C.ink} strokeWidth="1" strokeOpacity="0.25" strokeDasharray="3 3" />
+                {series.map((s, si) => {
+                  const v = data[hoverIdx][s.key];
+                  if (v == null || !Number.isFinite(v)) return null;
+                  return <circle key={si} cx={xScale(hoverIdx)} cy={yScale(v)} r="3.4" fill="#fff" stroke={s.color} strokeWidth="2" />;
+                })}
+              </g>
+            )}
+          </svg>
+          {ticks.map((t, i) => (
+            <div key={"y" + i} style={{ position: "absolute", left: 0, width: padding.l - 6, top: (yScale(t) / H) * 100 + "%", transform: "translateY(-50%)", textAlign: "right", fontSize: 10, color: C.muted, fontVariantNumeric: "tabular-nums", pointerEvents: "none" }}>{yFmt(Math.round(t))}</div>
+          ))}
+          {labels.map((l, i) => (
+            <div key={"x" + i} style={{ position: "absolute", left: (xScale(i) / W) * 100 + "%", bottom: 0, transform: "translateX(-50%)", fontSize: 9.5, color: C.muted, pointerEvents: "none" }}>{l}</div>
+          ))}
+          {tooltip}
+        </div>
+      );
+    }
+
+    function DualBars({ data, keys, colors, names, height = 84, yMax, valueFmt = (v) => (v == null ? 0 : v.toLocaleString()) }) {
+      const [hover, setHover] = useState(null);
+      if (!data || !data.length) return <Empty />;
+      const all = data.flatMap((d) => keys.map((k) => d[k] || 0));
+      const max = yMax || Math.max(...all, 1);
+      return (
+        <div style={{ position: "relative" }}>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height }}>
+            {data.map((d, i) => (
+              <div key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                style={{ flex: 1, display: "flex", alignItems: "flex-end", gap: 2, height: "100%", cursor: "crosshair", background: hover === i ? "rgba(26,26,26,0.04)" : "transparent", borderRadius: 3 }}>
+                {keys.map((k, ki) => (
+                  <div key={ki} style={{ flex: 1, height: Math.max((d[k] / max) * height, 1.5), background: colors[ki], borderRadius: "2px 2px 0 0" }} />
+                ))}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 4, marginTop: 5, fontSize: 9.5, color: C.muted }}>
+            {data.map((d, i) => <div key={i} style={{ flex: 1, textAlign: "center" }}>{(d.label || "")[0]}</div>)}
+          </div>
+          {hover != null && data[hover] && (
+            <div style={{ position: "absolute", bottom: height + 14, left: "calc(" + ((hover + 0.5) / data.length) * 100 + "% - 62px)", width: 124, background: C.ink, color: "#fff", padding: "7px 10px", borderRadius: 6, fontSize: 11.5, lineHeight: 1.5, fontVariantNumeric: "tabular-nums", pointerEvents: "none", boxShadow: "0 4px 12px rgba(0,0,0,0.2)", zIndex: 5 }}>
+              <div style={{ fontSize: 10, color: "#C9C2B0", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 3 }}>{data[hover].label}</div>
+              {keys.map((k, ki) => (
+                <div key={ki} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: colors[ki] }} />
+                  <span style={{ flex: 1 }}>{(names && names[ki]) || k}</span>
+                  <span style={{ fontWeight: 600 }}>{valueFmt(data[hover][k])}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Donut({ data, size = 104, thickness = 16, colors = {} }) {
+      const entries = Object.entries(data).filter(([, v]) => v > 0);
+      const total = entries.reduce((a, [, v]) => a + v, 0) || 1;
+      const r = (size - thickness) / 2, cx = size / 2, cy = size / 2, CIRC = 2 * Math.PI * r;
+      let acc = 0;
+      return (
+        <svg width={size} height={size} style={{ display: "block", flexShrink: 0 }}>
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke={C.grid} strokeWidth={thickness} />
+          {entries.map(([k, v], i) => {
+            const frac = v / total, dash = frac * CIRC, offset = -acc * CIRC;
+            acc += frac;
+            return <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={colors[k] || C.muted} strokeWidth={thickness} strokeDasharray={dash + " " + (CIRC - dash)} strokeDashoffset={offset} transform={"rotate(-90 " + cx + " " + cy + ")"} />;
+          })}
+          <text x={cx} y={cy - 2} textAnchor="middle" fontSize="22" fontWeight="300" fill={C.black} fontFamily="'Outfit', sans-serif">{total.toLocaleString()}</text>
+          <text x={cx} y={cy + 14} textAnchor="middle" fontSize="8.5" fill={C.muted} fontFamily="'Outfit', sans-serif" letterSpacing="1">TOTAL</text>
+        </svg>
+      );
+    }
+
+    function DonutCard({ title, subtitle, data, colors, drill }) {
+      const entries = Object.entries(data).filter(([, v]) => v > 0);
+      const total = entries.reduce((a, [, v]) => a + v, 0) || 1;
+      return (
+        <ChartCard title={title} subtitle={subtitle} drill={drill}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <Donut data={data} colors={colors} />
+            <div style={{ flex: 1 }}>
+              {entries.map(([k, v]) => (
+                <div key={k} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, padding: "3px 0" }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: colors[k] || C.muted }} />
+                  <span style={{ flex: 1, color: C.black }}>{k}</span>
+                  <span style={{ color: C.muted, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{v.toLocaleString()}</span>
+                  <span style={{ color: "#B8AF9C", fontSize: 11, width: 38, textAlign: "right" }}>{((v / total) * 100).toFixed(0)}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </ChartCard>
+      );
+    }
+
+    function HBars({ rows, color = C.gold, valueFmt = (v) => v, height = 14 }) {
+      if (!rows || !rows.length) return <Empty />;
+      const max = Math.max(...rows.map((r) => r.value), 1);
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {rows.map((r, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
+              <div style={{ width: 108, color: C.black, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.label}>{r.label}</div>
+              <div style={{ flex: 1, background: C.bg, borderRadius: 3, height, overflow: "hidden" }}>
+                <div style={{ width: (r.value / max) * 100 + "%", height: "100%", background: r.color || color, borderRadius: 3, transition: "width .25s ease" }} />
+              </div>
+              <div style={{ width: 64, textAlign: "right", color: C.muted, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{valueFmt(r.value)}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function Funnel({ steps, color = C.gold }) {
+      const max = Math.max(...steps.map((s) => s.value), 1);
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {steps.map((s, i) => {
+            const w = (s.value / max) * 100;
+            const conv = i > 0 && steps[i - 1].value ? ((s.value / steps[i - 1].value) * 100).toFixed(0) + "%" : null;
+            return (
+              <div key={i}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 11.5, marginBottom: 3 }}>
+                  <span style={{ color: C.black, fontWeight: 500 }}>{s.label}</span>
+                  <span style={{ color: C.muted, fontVariantNumeric: "tabular-nums" }}>
+                    <b style={{ color: C.black }}>{Number(s.value).toLocaleString()}</b>
+                    {conv && <span style={{ marginLeft: 6, fontSize: 10, color: "#B8AF9C" }}>{conv} ↓</span>}
+                  </span>
+                </div>
+                <div style={{ width: Math.max(w, 3) + "%", minWidth: 24, height: 18, background: "linear-gradient(90deg," + color + "," + color + "cc)", borderRadius: "3px 9px 9px 3px", opacity: 0.45 + (i / steps.length) * 0.55 }} />
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ── Modal + drill table ───────────────────────────────────────────────────
     function Modal({ title, onClose, children }) {
       useEffect(() => {
         const onKey = (e) => { if (e.key === "Escape") onClose(); };
@@ -130,17 +426,11 @@
         return () => window.removeEventListener("keydown", onKey);
       }, []);
       return (
-        <div
-          onClick={onClose}
-          style={{ position: "fixed", inset: 0, background: "rgba(26,26,26,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: "#fff", borderRadius: 14, maxWidth: 980, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}
-          >
+        <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(26,26,26,0.4)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, maxWidth: 980, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(0,0,0,0.22)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 22px", borderBottom: "1px solid " + C.border }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700, color: C.black }}>{title}</h3>
-              <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, color: C.muted, lineHeight: 1, padding: 0 }}>×</button>
+              <h3 style={{ fontSize: 15.5, fontWeight: 600, color: C.black }}>{title}</h3>
+              <button onClick={onClose} style={{ background: C.bg, border: "1px solid " + C.border, width: 28, height: 28, borderRadius: 7, fontSize: 14, color: C.muted, lineHeight: 1 }}>✕</button>
             </div>
             <div style={{ overflow: "auto" }}>{children}</div>
           </div>
@@ -162,19 +452,15 @@
           <thead>
             <tr>
               {cols.map((c) => (
-                <th key={c.key} style={{ textAlign: c.money ? "right" : "left", padding: "10px 18px", position: "sticky", top: 0, background: C.bg, color: C.muted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700, borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>
-                  {c.label}
-                </th>
+                <th key={c.key} style={{ textAlign: c.money ? "right" : "left", padding: "10px 18px", position: "sticky", top: 0, background: "#F9F6F0", color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>{c.label}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {drill.rows.map((r, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid " + C.border, background: i % 2 ? "#FFFDF9" : "#fff" }}>
+              <tr key={i} style={{ borderBottom: "1px solid " + C.grid, background: i % 2 ? "#FCFAF6" : "#fff" }}>
                 {cols.map((c) => (
-                  <td key={c.key} style={{ padding: "9px 18px", textAlign: c.money ? "right" : "left", color: C.black, fontVariantNumeric: c.money ? "tabular-nums" : "normal", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {cell(r, c)}
-                  </td>
+                  <td key={c.key} style={{ padding: "9px 18px", textAlign: c.money ? "right" : "left", color: C.black, fontVariantNumeric: c.money ? "tabular-nums" : "normal", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cell(r, c)}</td>
                 ))}
               </tr>
             ))}
@@ -183,274 +469,158 @@
       );
     }
 
-    function SectionTitle({ children, right }) {
-      return (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "26px 0 12px" }}>
-          <h2 style={{ fontSize: 16, fontWeight: 700, color: C.black, display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: C.gold, display: "inline-block" }} />
-            {children}
-          </h2>
-          {right}
-        </div>
-      );
-    }
-
-    const grid = (min = 200) => ({
-      display: "grid",
-      gridTemplateColumns: "repeat(auto-fit, minmax(" + min + "px, 1fr))",
-      gap: 14,
-    });
-
-    // ── Simple SVG charts (no deps) ──────────────────────────────────────────
-    function BarChart({ data, keys, colors, height = 200 }) {
-      if (!data || !data.length) return <Empty />;
-      const max = Math.max(1, ...data.flatMap((d) => keys.map((k) => Math.abs(d[k] || 0))));
-      const bw = 100 / data.length;
-      return (
-        <svg viewBox={"0 0 " + (data.length * 40) + " " + height} width="100%" height={height} preserveAspectRatio="none">
-          {data.map((d, i) => {
-            const gap = 4;
-            const groupW = 40;
-            const innerW = groupW - gap * 2;
-            const kw = innerW / keys.length;
-            return (
-              <g key={i} transform={"translate(" + i * groupW + ",0)"}>
-                {keys.map((k, ki) => {
-                  const h = (Math.abs(d[k] || 0) / max) * (height - 24);
-                  return (
-                    <rect
-                      key={k}
-                      x={gap + ki * kw}
-                      y={height - 16 - h}
-                      width={kw - 1}
-                      height={Math.max(h, 0)}
-                      fill={colors[ki]}
-                      rx="1"
-                    />
-                  );
-                })}
-                <text x={groupW / 2} y={height - 4} fontSize="6" textAnchor="middle" fill={C.muted}>
-                  {fmt.month(d.month)}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      );
-    }
-
-    function LineChart({ data, valueKey, color, height = 200, suffix = "" }) {
-      if (!data || !data.length) return <Empty />;
-      const vals = data.map((d) => d[valueKey] || 0);
-      const max = Math.max(1, ...vals);
-      const min = Math.min(0, ...vals);
-      const w = data.length * 40;
-      const range = max - min || 1;
-      const pts = data.map((d, i) => {
-        const x = i * 40 + 20;
-        const y = height - 16 - ((d[valueKey] - min) / range) * (height - 28);
-        return [x, y];
-      });
-      const path = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0] + "," + p[1]).join(" ");
-      return (
-        <svg viewBox={"0 0 " + w + " " + height} width="100%" height={height} preserveAspectRatio="none">
-          <path d={path} fill="none" stroke={color} strokeWidth="2" />
-          {pts.map((p, i) => (
-            <g key={i}>
-              <circle cx={p[0]} cy={p[1]} r="2.5" fill={color} />
-              <text x={p[0]} y={height - 4} fontSize="6" textAnchor="middle" fill={C.muted}>
-                {fmt.month(data[i].month)}
-              </text>
-            </g>
-          ))}
-        </svg>
-      );
-    }
-
-    function Empty({ label }) {
-      return (
-        <div style={{ padding: 28, textAlign: "center", color: C.muted, fontSize: 13 }}>
-          {label || "No data yet"}
-        </div>
-      );
-    }
-
-    function Funnel({ funnel }) {
-      const steps = [
-        { label: "Inquiries", value: funnel.inquiries },
-        { label: "Showings", value: funnel.showings },
-        { label: "Applications", value: funnel.applications },
-        { label: "Approved", value: funnel.approved },
-        { label: "Converted", value: funnel.converted },
-      ];
-      const max = Math.max(1, ...steps.map((s) => s.value));
-      return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {steps.map((s) => (
-            <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ width: 100, fontSize: 13, color: C.muted }}>{s.label}</span>
-              <div style={{ flex: 1, background: C.bg, borderRadius: 6, overflow: "hidden", height: 26 }}>
-                <div
-                  style={{
-                    width: Math.max((s.value / max) * 100, 2) + "%",
-                    background: "linear-gradient(90deg," + C.gold + "," + C.darkGold + ")",
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    paddingLeft: 8,
-                    color: "#fff",
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}
-                >
-                  {s.value}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    function BreakdownBar({ rows, color }) {
-      if (!rows || !rows.length) return <Empty />;
-      const max = Math.max(1, ...rows.map((r) => r.count));
-      return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {rows.map((r) => (
-            <div key={r.source} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ width: 120, fontSize: 12.5, color: C.black, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {r.source}
-              </span>
-              <div style={{ flex: 1, background: C.bg, borderRadius: 5, height: 18 }}>
-                <div style={{ width: Math.max((r.count / max) * 100, 2) + "%", background: color || C.gold, height: "100%", borderRadius: 5 }} />
-              </div>
-              <span style={{ width: 36, textAlign: "right", fontSize: 12.5, fontWeight: 600 }}>{r.count}</span>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    // ── Tabs ──────────────────────────────────────────────────────────────────
+    // ── Tabs ────────────────────────────────────────────────────────────────
     function DashboardTab({ d }) {
-      const o = d.occupancy, l = d.leasing, f = d.financials, m = d.marketing, w = d.maintenance;
+      const o = d.occupancy, l = d.leasing, f = d.financials, m = d.marketing, w = d.maintenance, ch = d.charts;
+      const revData = (ch.monthlyRevenue || []).map((r) => ({ label: fmt.monthShort(r.month), gross: r.gross, net: r.net, expense: r.expense }));
+      const occData = (ch.occupancyTrend || []).map((r) => ({ label: fmt.monthShort(r.month), rate: r.rate }));
+      const occSpark = (ch.occupancyTrend || []).map((r) => r.rate).filter((v) => v > 0);
+      const delSpark = (ch.delinquencyTrend || []).map((r) => r.total).filter((v) => v > 0);
+      const aging = [
+        { label: "Current", value: f.aging.current, color: C.green },
+        { label: "30+ days", value: f.aging.thirtyPlus, color: C.amber },
+        { label: "60+ days", value: f.aging.sixtyPlus, color: C.darkGold },
+        { label: "90+ days", value: f.aging.ninetyPlus, color: C.red },
+      ];
+      const funnelSteps = [
+        { label: "Inquiries", value: m.funnel.inquiries },
+        { label: "Showings", value: m.funnel.showings },
+        { label: "Applications", value: m.funnel.applications },
+        { label: "Approved", value: m.funnel.approved },
+        { label: "Converted", value: m.funnel.converted },
+      ];
+      const sources = (m.inquiriesBySource || []).slice(0, 6).map((r) => ({ label: r.source, value: r.count }));
+
       return (
         <div>
-          <div style={grid(220)}>
-            <KpiCard label="Occupancy Rate" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} drill="occupancy" />
-            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} sub={o.properties + " properties"} drill="units" />
-            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} sub={fmt.money(f.delinquent) + " outstanding"} drill="delinquency" />
-            <KpiCard label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} drill="rentRoll" />
+          {/* HERO */}
+          <SectionHeader title="Top of Mind" subtitle="Tap any tile or chart for the records behind it" />
+          <div style={gridAuto(220)}>
+            <KpiCard big label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} drill="occupancy" spark={occSpark} sparkColor={C.green} />
+            <KpiCard big label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" spark={delSpark} sparkColor={C.red} />
+            <KpiCard big label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} drill="rentRoll" />
+            <KpiCard big label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} sub={fmt.num(w.avgDaysToComplete) + "d avg to close"} drill="openWorkOrders" />
           </div>
 
-          <SectionTitle>Occupancy</SectionTitle>
-          <div style={grid(180)}>
-            <KpiCard label="Occupied" value={fmt.num(o.occupied)} tone="good" drill="occupied" />
-            <KpiCard label="Vacant" value={fmt.num(o.vacant)} tone={o.vacant ? "warn" : "good"} drill="vacant" />
+          {/* FINANCIALS */}
+          <SectionHeader title="Financials" subtitle="Income, collection & delinquency" />
+          <div style={gridCols(3)}>
+            <ChartCard span={2} title="Revenue vs Expense — 12 months" subtitle="Gross income, expense and net by month"
+              legend={<LegendInline items={[{ c: C.gold, l: "Gross" }, { c: C.red, l: "Expense" }, { c: C.green, l: "Net" }]} />}
+              drill="grossIncome">
+              <LineChart data={revData} height={170} yFmt={fmt.moneyAxis}
+                series={[
+                  { key: "gross", name: "Gross", color: C.gold, width: 2.4 },
+                  { key: "expense", name: "Expense", color: C.red, width: 1.8 },
+                  { key: "net", name: "Net", color: C.green, width: 1.8 },
+                ]} />
+            </ChartCard>
+            <ChartCard title="Delinquency aging" subtitle={fmt.money(f.delinquent) + " across " + f.delinquentCount + " accounts"} drill="delinquency">
+              <HBars rows={aging} valueFmt={fmt.money} height={13} />
+            </ChartCard>
+          </div>
+          <div style={{ ...gridAuto(180), marginTop: 12 }}>
+            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
+            <KpiCard label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
+            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
+          </div>
+
+          {/* OCCUPANCY */}
+          <SectionHeader title="Occupancy & Portfolio" />
+          <div style={gridCols(3)}>
+            <ChartCard span={2} title="Occupancy rate — 12 months" subtitle="Trailing monthly occupancy" drill="occupancy">
+              <LineChart data={occData} height={150} yFmt={(v) => v + "%"} series={[{ key: "rate", name: "Occupancy", color: C.green, width: 2.4 }]} />
+            </ChartCard>
+            <DonutCard title="Unit status" subtitle={o.totalUnits + " units · " + o.properties + " properties"} drill="units"
+              data={{ Occupied: o.occupied, "Vacant — rented": o.vacantRented, "Vacant — not rented": o.vacantNotRented }}
+              colors={{ Occupied: C.green, "Vacant — rented": C.amber, "Vacant — not rented": C.red }} />
+          </div>
+          <div style={{ ...gridAuto(180), marginTop: 12 }}>
+            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} sub={o.properties + " properties"} drill="units" />
             <KpiCard label="Vacant — Not Rented" value={fmt.num(o.vacantNotRented)} tone="bad" drill="vacantNotRented" />
-            <KpiCard label="Vacant — Rented" value={fmt.num(o.vacantRented)} drill="vacantRented" />
             <KpiCard label="Avg Days Vacant" value={fmt.num(o.avgDaysVacant)} unit="days" drill="vacancies" />
             <KpiCard label="Units on Market" value={fmt.num(m.unitsOnMarket)} drill="vacancies" />
+            <KpiCard label="Owners" value={fmt.num(o.owners)} drill="owners" />
           </div>
 
-          <SectionTitle>Leasing</SectionTitle>
-          <div style={grid(180)}>
+          {/* LEASING */}
+          <SectionHeader title="Leasing Pipeline" />
+          <div style={gridCols(3)}>
+            <DonutCard title="Lease composition" subtitle="Fixed-term vs month-to-month" drill="fixedLeases"
+              data={{ "Fixed-term": l.fixedLeases, "Month-to-month": l.mtmLeases }}
+              colors={{ "Fixed-term": C.gold, "Month-to-month": C.blue }} />
+            <ChartCard span={2} title="Leasing funnel" subtitle="Inquiry → converted (trailing window)" drill="applications">
+              <Funnel steps={funnelSteps} />
+            </ChartCard>
+          </div>
+          <div style={{ ...gridAuto(180), marginTop: 12 }}>
             <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} sub={l.renewalsCount + " renewed"} drill="renewals" />
-            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} drill="mtm" />
-            <KpiCard label="Fixed Leases" value={fmt.num(l.fixedLeases)} drill="fixedLeases" />
-            <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub="trailing 12 mo" drill="applications" />
             <KpiCard label="Move-ins" value={fmt.num(l.moveins)} sub="trailing 12 mo" drill="moveins" />
+            <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub="trailing 12 mo" drill="applications" />
             <KpiCard label="Apps / Move-in" value={fmt.num(l.appsPerMovein)} drill="applications" />
+            <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
           </div>
 
-          <SectionTitle>Marketing & Funnel</SectionTitle>
-          <div style={{ ...grid(260), alignItems: "stretch" }}>
-            <div style={grid(150)}>
-              <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} drill="inquiries" />
-              <KpiCard label="Active Prospects" value={fmt.num(m.activeProspects)} drill="activeProspects" />
-              <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
-              <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" drill="showingsCompleted" />
-              <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone={m.noShows ? "warn" : "good"} drill="noShows" />
-              <KpiCard label="Show Completion" value={fmt.pct(m.showingCompletionRate)} drill="showings" />
-            </div>
-            <Card>
-              <h3 style={{ fontSize: 13, color: C.muted, marginBottom: 12, fontWeight: 600 }}>Leasing Funnel</h3>
-              <Funnel funnel={m.funnel} />
-            </Card>
+          {/* MARKETING & MAINTENANCE */}
+          <SectionHeader title="Marketing & Maintenance" />
+          <div style={gridCols(2)}>
+            <ChartCard title="Inquiries by source" subtitle="Trailing 12 months" drill="inquiries">
+              {sources.length ? <HBars rows={sources} color={C.blue} valueFmt={fmt.num} /> : <Empty label="No source data" />}
+            </ChartCard>
+            <DonutCard title="Work orders by priority" subtitle={w.openWorkOrders + " open"} drill="openWorkOrders"
+              data={{ Urgent: w.byPriority.urgent, Normal: w.byPriority.normal, Low: w.byPriority.low }}
+              colors={{ Urgent: C.red, Normal: C.gold, Low: C.green }} />
           </div>
-
-          <SectionTitle>Financials</SectionTitle>
-          <div style={grid(180)}>
-            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
-            <KpiCard label="Current" value={fmt.money(f.aging.current)} drill="delinquencyCurrent" />
-            <KpiCard label="30+ Days" value={fmt.money(f.aging.thirtyPlus)} tone="warn" drill="delinquency30" />
-            <KpiCard label="60+ Days" value={fmt.money(f.aging.sixtyPlus)} tone="warn" drill="delinquency60" />
-            <KpiCard label="90+ Days" value={fmt.money(f.aging.ninetyPlus)} tone="bad" drill="delinquency90" />
-            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
-          </div>
-
-          <SectionTitle>Maintenance</SectionTitle>
-          <div style={grid(180)}>
-            <KpiCard label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} drill="openWorkOrders" />
-            <KpiCard label="Avg Days to Complete" value={fmt.num(w.avgDaysToComplete)} unit="days" drill="completedWorkOrders" />
-            <KpiCard label="Urgent" value={fmt.num(w.byPriority.urgent)} tone="bad" drill="woUrgent" />
-            <KpiCard label="Normal" value={fmt.num(w.byPriority.normal)} drill="woNormal" />
-            <KpiCard label="Low" value={fmt.num(w.byPriority.low)} drill="woLow" />
+          <div style={{ ...gridAuto(180), marginTop: 12 }}>
+            <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} drill="inquiries" />
+            <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
+            <KpiCard label="Show Completion" value={fmt.pct(m.showingCompletionRate)} tone="good" drill="showingsCompleted" />
+            <KpiCard label="Urgent WOs" value={fmt.num(w.byPriority.urgent)} tone={w.byPriority.urgent ? "bad" : "good"} drill="woUrgent" />
             <KpiCard label="Unit Turns" value={fmt.num(w.byType.unitTurn)} drill="woUnitTurn" />
           </div>
-
-          <SectionTitle>Trends</SectionTitle>
-          <div style={grid(320)}>
-            <Card>
-              <h3 style={{ fontSize: 13, color: C.muted, marginBottom: 10, fontWeight: 600 }}>12-Month Revenue vs Expense</h3>
-              <BarChart data={d.charts.monthlyRevenue} keys={["gross", "expense"]} colors={[C.gold, C.red]} />
-              <Legend items={[{ c: C.gold, l: "Gross" }, { c: C.red, l: "Expense" }]} />
-            </Card>
-            <Card>
-              <h3 style={{ fontSize: 13, color: C.muted, marginBottom: 10, fontWeight: 600 }}>Occupancy Trend</h3>
-              <LineChart data={d.charts.occupancyTrend} valueKey="rate" color={C.green} suffix="%" />
-            </Card>
-          </div>
-        </div>
-      );
-    }
-
-    function Legend({ items }) {
-      return (
-        <div style={{ display: "flex", gap: 16, marginTop: 8, justifyContent: "center" }}>
-          {items.map((it) => (
-            <span key={it.l} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: C.muted }}>
-              <span style={{ width: 10, height: 10, background: it.c, borderRadius: 2 }} /> {it.l}
-            </span>
-          ))}
         </div>
       );
     }
 
     function LeasingTab({ d }) {
-      const m = d.marketing;
+      const m = d.marketing, l = d.leasing;
+      const funnelSteps = [
+        { label: "Inquiries", value: m.funnel.inquiries },
+        { label: "Showings", value: m.funnel.showings },
+        { label: "Applications", value: m.funnel.applications },
+        { label: "Approved", value: m.funnel.approved },
+        { label: "Converted", value: m.funnel.converted },
+      ];
+      const sources = (m.inquiriesBySource || []).slice(0, 8).map((r) => ({ label: r.source, value: r.count }));
       return (
         <div>
-          <SectionTitle>Funnel Snapshot (30 days)</SectionTitle>
-          <Card><Funnel funnel={m.funnel} /></Card>
-
-          <SectionTitle>Inquiry Sources (12 mo)</SectionTitle>
-          <Card><BreakdownBar rows={m.inquiriesBySource} /></Card>
-
-          <SectionTitle>Showings</SectionTitle>
-          <div style={grid(180)}>
-            <KpiCard label="Total (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
-            <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" drill="showingsCompleted" />
-            <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone="warn" drill="noShows" />
-            <KpiCard label="Completion Rate" value={fmt.pct(m.showingCompletionRate)} drill="showings" />
+          <SectionHeader title="Leasing & Marketing" subtitle="Pipeline, showings & sources" />
+          <div style={gridCols(2)}>
+            <ChartCard title="Leasing funnel" subtitle="Inquiry to converted" drill="applications">
+              <Funnel steps={funnelSteps} />
+            </ChartCard>
+            <ChartCard title="Inquiries by source" subtitle="Trailing 12 months" drill="inquiries">
+              {sources.length ? <HBars rows={sources} color={C.blue} valueFmt={fmt.num} /> : <Empty label="No source data" />}
+            </ChartCard>
+          </div>
+          <div style={gridCols(2)}>
+            <DonutCard title="Showings (30 days)" subtitle={m.showingsTotal + " scheduled"} drill="showings"
+              data={{ Completed: m.showingsCompleted, "No-shows": m.noShows, Other: Math.max(m.showingsTotal - m.showingsCompleted - m.noShows, 0) }}
+              colors={{ Completed: C.green, "No-shows": C.red, Other: C.amber }} />
+            <DonutCard title="Lease composition" subtitle="Fixed-term vs month-to-month" drill="fixedLeases"
+              data={{ "Fixed-term": l.fixedLeases, "Month-to-month": l.mtmLeases }}
+              colors={{ "Fixed-term": C.gold, "Month-to-month": C.blue }} />
           </div>
 
-          <SectionTitle>Application Pipeline</SectionTitle>
-          <div style={grid(180)}>
-            <KpiCard label="Inquiries" value={fmt.num(m.funnel.inquiries)} drill="inquiries" />
+          <SectionHeader title="Pipeline Detail" />
+          <div style={gridAuto(180)}>
+            <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} drill="inquiries" />
+            <KpiCard label="Active Prospects" value={fmt.num(m.activeProspects)} drill="activeProspects" />
+            <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
+            <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" drill="showingsCompleted" />
+            <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone={m.noShows ? "warn" : "good"} drill="noShows" />
+            <KpiCard label="Completion Rate" value={fmt.pct(m.showingCompletionRate)} drill="showings" />
             <KpiCard label="Applications" value={fmt.num(m.funnel.applications)} drill="applications" />
-            <KpiCard label="Approved" value={fmt.num(m.funnel.approved)} tone="good" drill="applications" />
             <KpiCard label="Converted" value={fmt.num(m.funnel.converted)} tone="good" drill="applications" />
           </div>
         </div>
@@ -461,74 +631,76 @@
       const [authed, setAuthed] = useState(false);
       const [pw, setPw] = useState("");
       const [err, setErr] = useState(false);
-      const f = d.financials, o = d.occupancy, l = d.leasing;
+      const f = d.financials, o = d.occupancy, l = d.leasing, ch = d.charts;
 
       if (!authed) {
         return (
-          <div style={{ maxWidth: 360, margin: "60px auto", textAlign: "center" }}>
-            <Card>
-              <h2 style={{ fontSize: 18, marginBottom: 6 }}>CEO View</h2>
-              <p style={{ color: C.muted, fontSize: 13, marginBottom: 16 }}>Enter password to continue.</p>
-              <input
-                type="password"
-                value={pw}
-                autoFocus
+          <div style={{ maxWidth: 360, margin: "60px auto" }}>
+            <div style={{ background: C.card, border: "1px solid " + C.border, borderRadius: 12, padding: "28px 32px", boxShadow: "0 4px 18px rgba(0,0,0,0.04)" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>CEO View</div>
+              <div style={{ fontSize: 15, color: C.black, marginBottom: 18, fontWeight: 500 }}>Enter password to continue</div>
+              <input type="password" value={pw} autoFocus
                 onChange={(e) => { setPw(e.target.value); setErr(false); }}
                 onKeyDown={(e) => { if (e.key === "Enter") { pw === "RMCRTCS" ? setAuthed(true) : setErr(true); } }}
                 placeholder="Password"
-                style={{ width: "100%", padding: "10px 12px", border: "1px solid " + (err ? C.red : C.border), borderRadius: 8, fontSize: 14, marginBottom: 12 }}
-              />
-              <button
-                onClick={() => (pw === "RMCRTCS" ? setAuthed(true) : setErr(true))}
-                style={{ width: "100%", padding: "10px", background: C.gold, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14 }}
-              >
-                Unlock
-              </button>
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid " + (err ? C.red : C.border), borderRadius: 8, fontSize: 14, marginBottom: 12, outline: "none" }} />
+              <button onClick={() => (pw === "RMCRTCS" ? setAuthed(true) : setErr(true))}
+                style={{ width: "100%", padding: "10px", background: C.black, color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 14 }}>Unlock</button>
               {err ? <p style={{ color: C.red, fontSize: 12.5, marginTop: 10 }}>Incorrect password</p> : null}
-            </Card>
+            </div>
           </div>
         );
       }
 
+      const revData = (ch.monthlyRevenue || []).map((r) => ({ label: fmt.monthShort(r.month), gross: r.gross, net: r.net, expense: r.expense }));
+      const delData = (ch.delinquencyTrend || []).map((r) => ({ label: fmt.monthShort(r.month), total: r.total }));
+      const aging = [
+        { label: "Current", value: f.aging.current, color: C.green },
+        { label: "30+ days", value: f.aging.thirtyPlus, color: C.amber },
+        { label: "60+ days", value: f.aging.sixtyPlus, color: C.darkGold },
+        { label: "90+ days", value: f.aging.ninetyPlus, color: C.red },
+      ];
       return (
         <div>
-          <SectionTitle>Financial Deep Dive</SectionTitle>
-          <div style={grid(200)}>
-            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
-            <KpiCard label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
-            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" drill="delinquency" />
-            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
+          <SectionHeader title="CEO View · Financial Performance" />
+          <div style={gridAuto(220)}>
+            <KpiCard big label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
+            <KpiCard big label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
+            <KpiCard big label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
+            <KpiCard big label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} drill="occupancy" />
           </div>
 
-          <SectionTitle>Delinquency Aging</SectionTitle>
-          <div style={grid(180)}>
-            <KpiCard label="Current" value={fmt.money2(f.aging.current)} drill="delinquencyCurrent" />
-            <KpiCard label="30+ Days" value={fmt.money2(f.aging.thirtyPlus)} tone="warn" drill="delinquency30" />
-            <KpiCard label="60+ Days" value={fmt.money2(f.aging.sixtyPlus)} tone="warn" drill="delinquency60" />
-            <KpiCard label="90+ Days" value={fmt.money2(f.aging.ninetyPlus)} tone="bad" drill="delinquency90" />
+          <SectionHeader title="Income — 12 months" />
+          <ChartCard title="Gross · Expense · Net" subtitle="Trailing twelve months"
+            legend={<LegendInline items={[{ c: C.gold, l: "Gross" }, { c: C.red, l: "Expense" }, { c: C.green, l: "Net" }]} />}
+            drill="grossIncome">
+            <LineChart data={revData} height={190} yFmt={fmt.moneyAxis}
+              series={[
+                { key: "gross", name: "Gross", color: C.gold, width: 2.4 },
+                { key: "expense", name: "Expense", color: C.red, width: 1.8 },
+                { key: "net", name: "Net", color: C.green, width: 1.8 },
+              ]} />
+          </ChartCard>
+
+          <SectionHeader title="Delinquency" />
+          <div style={gridCols(2)}>
+            <ChartCard title="Delinquency total — 12 months" subtitle="Outstanding balance by month" drill="delinquency">
+              <LineChart data={delData} height={160} yFmt={fmt.moneyAxis} series={[{ key: "total", name: "Delinquent", color: C.red, width: 2.4 }]} />
+            </ChartCard>
+            <ChartCard title="Delinquency aging" subtitle={fmt.money(f.delinquent) + " outstanding"} drill="delinquency">
+              <HBars rows={aging} valueFmt={fmt.money2} height={14} />
+            </ChartCard>
           </div>
 
-          <SectionTitle>Renewal Performance</SectionTitle>
-          <div style={grid(180)}>
+          <SectionHeader title="Renewals & Portfolio" />
+          <div style={gridAuto(180)}>
             <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} drill="renewals" />
             <KpiCard label="Renewals" value={fmt.num(l.renewalsCount)} drill="renewals" />
-            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} drill="mtm" />
             <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
-          </div>
-
-          <SectionTitle>Portfolio</SectionTitle>
-          <div style={grid(180)}>
             <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} drill="units" />
             <KpiCard label="Properties" value={fmt.num(o.properties)} drill="properties" />
             <KpiCard label="Owners" value={fmt.num(o.owners)} drill="owners" />
-            <KpiCard label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} drill="occupancy" />
           </div>
-
-          <SectionTitle>Revenue Trend</SectionTitle>
-          <Card>
-            <BarChart data={d.charts.monthlyRevenue} keys={["gross", "net", "expense"]} colors={[C.gold, C.green, C.red]} />
-            <Legend items={[{ c: C.gold, l: "Gross" }, { c: C.green, l: "Net" }, { c: C.red, l: "Expense" }]} />
-          </Card>
         </div>
       );
     }
@@ -551,7 +723,6 @@
           .catch((e) => setError(e.message))
           .finally(() => setLoading(false));
       };
-
       useEffect(load, []);
 
       const sync = () => {
@@ -577,90 +748,71 @@
         fetch("/api/drilldown/" + encodeURIComponent(key))
           .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
           .then((j) => setDrillData(j))
-          .catch((e) => setDrillData({ title: "Could not load records", cols: [], rows: [] }))
+          .catch(() => setDrillData({ title: "Could not load records", cols: [], rows: [] }))
           .finally(() => setDrillLoading(false));
       };
       const closeDrill = () => { setActiveDrill(null); setDrillData(null); };
-      const ctxValue = { open: openDrill };
 
       return (
-        <DrillContext.Provider value={ctxValue}>
-        <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-          <header style={{ background: "#fff", borderBottom: "1px solid " + C.border, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-            <img src="/logo.png" alt="Real Management Company" style={{ height: 60, width: "auto", display: "block" }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <span style={{ fontSize: 12, color: C.muted }}>
-                {syncedAt ? "Last sync: " + new Date(syncedAt).toLocaleString() : "Not synced yet"}
-              </span>
-              <button
-                onClick={sync}
-                disabled={syncing}
-                style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 700, fontSize: 13, opacity: syncing ? 0.6 : 1 }}
-              >
-                {syncing ? "Syncing…" : "Sync Now"}
-              </button>
-            </div>
-          </header>
+        <DrillContext.Provider value={{ open: openDrill }}>
+          <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+            <header style={{ background: "#fff", borderBottom: "1px solid " + C.border, padding: "12px 26px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, position: "sticky", top: 0, zIndex: 40 }}>
+              <img src="/logo.png" alt="Real Management Company" style={{ height: 54, width: "auto", display: "block" }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: C.muted }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: syncedAt ? C.green : "#CFC6B2" }} />
+                  {syncedAt ? "Synced " + new Date(syncedAt).toLocaleString() : "Not synced yet"}
+                </span>
+                <button onClick={sync} disabled={syncing}
+                  style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, opacity: syncing ? 0.6 : 1, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ display: "inline-block", transform: syncing ? "rotate(360deg)" : "none", transition: "transform 1.2s linear" }}>↻</span>
+                  {syncing ? "Syncing…" : "Sync Now"}
+                </button>
+              </div>
+            </header>
 
-          <nav style={{ display: "flex", gap: 4, padding: "0 24px", background: C.card, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, zIndex: 10 }}>
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: "14px 16px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: tab === t.id ? C.black : C.muted,
-                  borderBottom: "3px solid " + (tab === t.id ? C.gold : "transparent"),
-                  marginBottom: -1,
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
-          </nav>
+            <nav style={{ display: "flex", gap: 0, padding: "0 26px", background: C.card, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, zIndex: 30 }}>
+              {tabs.map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  style={{ background: "none", border: "none", padding: "13px 18px", fontSize: 13, fontWeight: tab === t.id ? 600 : 500, color: tab === t.id ? C.black : C.muted, borderBottom: "2px solid " + (tab === t.id ? C.gold : "transparent"), marginBottom: -1 }}>
+                  {t.label}
+                </button>
+              ))}
+            </nav>
 
-          <main style={{ flex: 1, padding: "8px 24px 48px", maxWidth: 1280, width: "100%", margin: "0 auto" }}>
-            {loading ? (
-              <div style={{ padding: 80, textAlign: "center", color: C.muted }}>Loading dashboard…</div>
-            ) : error ? (
-              <Card style={{ marginTop: 24, borderLeft: "4px solid " + C.red }}>
-                <h3 style={{ color: C.red, marginBottom: 6 }}>Could not load dashboard</h3>
-                <p style={{ color: C.muted, fontSize: 13 }}>{error}</p>
-                <p style={{ color: C.muted, fontSize: 13, marginTop: 8 }}>
-                  If AppFolio credentials are not yet configured, add them and click <b>Sync Now</b>.
-                </p>
-                <button onClick={load} style={{ marginTop: 12, background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 700 }}>Retry</button>
-              </Card>
-            ) : data ? (
-              <>
-                {tab === "dashboard" && <DashboardTab d={data.dashboard} />}
-                {tab === "leasing" && <LeasingTab d={data.dashboard} />}
-                {tab === "ceo" && <CeoTab d={data.dashboard} />}
-                {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
-                  <Card style={{ marginTop: 20, borderLeft: "4px solid " + C.amber }}>
-                    <p style={{ fontSize: 13, color: C.muted }}>
-                      No data yet. Make sure AppFolio credentials are set, then click <b>Sync Now</b> to pull live data.
-                    </p>
-                  </Card>
-                ) : null}
-              </>
+            <main style={{ flex: 1, padding: "4px 26px 48px", maxWidth: 1320, width: "100%", margin: "0 auto" }}>
+              {loading ? (
+                <div style={{ padding: 80, textAlign: "center", color: C.muted }}>Loading dashboard…</div>
+              ) : error ? (
+                <div style={{ marginTop: 24, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.red, borderRadius: 10, padding: 18 }}>
+                  <h3 style={{ color: C.red, marginBottom: 6 }}>Could not load dashboard</h3>
+                  <p style={{ color: C.muted, fontSize: 13 }}>{error}</p>
+                  <button onClick={load} style={{ marginTop: 12, background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600 }}>Retry</button>
+                </div>
+              ) : data ? (
+                <>
+                  {tab === "dashboard" && <DashboardTab d={data.dashboard} />}
+                  {tab === "leasing" && <LeasingTab d={data.dashboard} />}
+                  {tab === "ceo" && <CeoTab d={data.dashboard} />}
+                  {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
+                    <div style={{ marginTop: 20, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.amber, borderRadius: 10, padding: 18 }}>
+                      <p style={{ fontSize: 13, color: C.muted }}>No data yet. Make sure AppFolio credentials are set, then click <b>Sync Now</b>.</p>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </main>
+
+            {activeDrill ? (
+              <Modal title={drillData ? drillData.title : "Loading…"} onClose={closeDrill}>
+                {drillLoading ? (
+                  <div style={{ padding: 48, textAlign: "center", color: C.muted, fontSize: 13 }}>Loading records…</div>
+                ) : (
+                  <DrillTable drill={drillData} />
+                )}
+              </Modal>
             ) : null}
-          </main>
-
-          {activeDrill ? (
-            <Modal title={drillData ? drillData.title : "Loading…"} onClose={closeDrill}>
-              {drillLoading ? (
-                <div style={{ padding: 48, textAlign: "center", color: C.muted, fontSize: 13 }}>Loading records…</div>
-              ) : (
-                <DrillTable drill={drillData} />
-              )}
-            </Modal>
-          ) : null}
-        </div>
+          </div>
         </DrillContext.Provider>
       );
     }

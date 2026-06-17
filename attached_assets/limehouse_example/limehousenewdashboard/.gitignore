@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+*.log
+
+# SQLite database files — written to constantly by the running app;
+# tracking them only bloats checkpoints with binary diffs. Data is
+# re-derived from Buildium/RentEngine on each sync.
+server/data/limehouse.sqlite
+server/data/limehouse.sqlite-shm
+server/data/limehouse.sqlite-wal

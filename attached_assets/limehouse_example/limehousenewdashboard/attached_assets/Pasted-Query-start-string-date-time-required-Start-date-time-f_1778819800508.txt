@@ -1,0 +1,175 @@
+Query
+start
+string
+(date-time)
+required
+Start date/time for the reporting period (ISO 8601 format)
+
+Example:
+start=2024-01-01T00:00:00Z
+end
+string
+(date-time)
+required
+End date/time for the reporting period (ISO 8601 format)
+
+Example:
+end=2024-01-31T23:59:59Z
+
+get
+/reporting/leasing-performance/units/{unitId}
+curl
+
+
+curl -i -X GET \
+  'https://docs.rentengine.io/_mock/openapi/reporting/leasing-performance/units/12345?start=2024-01-01T00%3A00%3A00Z&end=2024-01-31T23%3A59%3A59Z' \
+  -H 'Authorization: Bearer <YOUR_JWT_HERE>'
+Try it
+Responses
+200
+400
+401
+404
+429
+500
+Expand all
+Success. Returns leasing performance metrics for the unit.
+
+Body
+application/json
+unit_id
+integer
+required
+ID of the unit
+
+Example:
+12345
+days_on_market
+integer or null
+required
+Number of days the unit has been on the market
+
+Example:
+45
+property_health
+string
+required
+Overall health assessment of the property listing
+
+Enum
+"Off-Market"
+"Healthy"
+"At-risk"
+"On Hold"
+"Waitlist"
+"Commercial"
+"Unknown"
+Example:
+"Healthy"
+benchmark_leads_since_last_price_change
+integer
+required
+Expected number of leads based on bedroom count and time since last price change
+
+Example:
+12
+new_prospects
+integer
+required
+Number of new prospects in the reporting period
+
+Example:
+15
+showings_scheduled
+integer
+required
+Number of showings scheduled in the reporting period
+
+Example:
+8
+showings_completed
+integer
+required
+Number of showings completed in the reporting period
+
+Example:
+6
+applications_requested
+integer
+required
+Number of applications requested in the reporting period
+
+Example:
+3
+applications_submitted
+integer
+required
+Number of applications submitted in the reporting period
+
+Example:
+2
+active_prospects
+integer
+required
+Number of active (non-terminal status) prospects in the reporting period
+
+Example:
+5
+upcoming_showings
+integer
+required
+Number of upcoming scheduled showings
+
+Example:
+2
+outbound_texts
+integer
+required
+Number of outbound text messages sent in the reporting period
+
+Example:
+25
+total_calls
+integer
+required
+Total number of calls in the reporting period
+
+Example:
+10
+showing_feedback
+Array of objects
+(ShowingFeedbackItem)
+required
+Feedback from completed showings in the reporting period
+
+
+-
+showing_feedback[].​prospect_id
+integer
+required
+ID of the prospect who attended the showing
+
+Example:
+789
+showing_feedback[].​prospect_name
+string
+required
+Name of the prospect
+
+Example:
+"John Doe"
+showing_feedback[].​created_at
+string
+(date-time)
+required
+When the showing was completed
+
+Example:
+"2024-01-15T14:30:00Z"
+showing_feedback[].​feedback
+string or null
+required
+Feedback notes from the showing
+
+Example:
+"Prospect liked the kitchen but concerned about parking availability"

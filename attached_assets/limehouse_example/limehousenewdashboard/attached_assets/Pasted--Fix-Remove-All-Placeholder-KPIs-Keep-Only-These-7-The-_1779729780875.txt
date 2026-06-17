@@ -1,0 +1,98 @@
+# Fix: Remove All Placeholder KPIs, Keep Only These 7
+
+The "Performance by Role" section you just added has too many KPIs. Remove ALL of them and replace with ONLY the 7 listed below. No placeholders, no gray dashes, no "None" values. If a role isn't listed below, it should not have a card at all. Only 3 role cards should exist.
+
+Remove the Administrative Assistant, Leasing Specialist, and Marketing Specialist cards entirely. Remove any KPIs from Portfolio Manager, Assistant Property Manager, or Bookkeeping Coordinator that are NOT in the list below.
+
+The summary bar at the top should only show 3 tiles (PM, APM, BC) — not 6.
+
+---
+
+## The Only 3 Roles and 7 KPIs
+
+### Role: Portfolio Manager
+- **Abbrev**: PM
+- **People**: 3 people
+- **KPIs**:
+
+**1. Portfolio Occupancy Rate**
+- Source badge: BD
+- Target: ≥95%
+- Direction: higher is better
+- Format: percentage
+- Formula: `(count of units where IsUnitOccupied == true) / (total active units) × 100`
+- Data: already cached from `GET /v1/rentals/units` — same units data the Buildium tab uses. Filter to active properties only.
+
+**2. Delinquency Rate**
+- Source badge: BD
+- Target: ≤3%
+- Direction: lower is better
+- Format: percentage
+- Formula: `(sum of TotalBalance where TotalBalance > 0 across active leases) / (rent roll total) × 100`
+- Data: already cached from `GET /v1/leases/outstandingbalances` and `GET /v1/leases/rent` — same delinquency and rent roll values the Buildium tab already computes.
+
+---
+
+### Role: Assistant Property Manager
+- **Abbrev**: APM
+- **People**: 2 people
+- **KPIs**:
+
+**3. Showing Completion Rate**
+- Source badge: RE
+- Target: ≥95%
+- Direction: higher is better
+- Format: percentage
+- Formula: `sum(showings_completed across all units) / sum(showings_scheduled across all units) × 100`
+- Data: from RentEngine `GET /reporting/leasing-performance/units/{unitId}`. This is a per-unit endpoint — iterate across all active RentEngine units and aggregate `showings_scheduled` and `showings_completed` from the `UnitLeasingPerformance` response. If this data isn't already in the RentEngine sync, add it.
+
+---
+
+### Role: Bookkeeping Coordinator
+- **Abbrev**: BC
+- **People**: 1 person
+- **KPIs**:
+
+**4. Reconciliation Accuracy**
+- Source badge: BD
+- Target: 100%
+- Direction: higher is better
+- Format: percentage
+- Formula: `(reconciliations without discrepancies) / (total reconciliations in period) × 100`
+- Data: from `GET /v1/bankaccounts/{bankAccountId}/reconciliations`. Pull reconciliation records for each bank account. If not yet cached, add to the Buildium sync.
+
+**5. Rent Processing Accuracy**
+- Source badge: BD
+- Target: 100%
+- Direction: higher is better
+- Format: percentage
+- Formula: `(rent/deposit transactions without reversals) / (total rent/deposit transactions) × 100`
+- Data: from `GET /v1/leases/{leaseId}/transactions` — look for reversed payment transactions as the error signal.
+
+**6. Vendor Compliance**
+- Source badge: BD
+- Target: 100%
+- Direction: higher is better
+- Format: percentage
+- Formula: `(active vendors where TaxPayerId is not empty AND VendorInsurance.ExpirationDate > today) / (total active vendors) × 100`
+- Data: from `GET /v1/vendors?status=Active`. Check `VendorMessage.TaxInformation.TaxPayerId` for W-9 and `VendorMessage.VendorInsurance.ExpirationDate` for COI.
+
+**7. 1099 Compliance**
+- Source badge: BD
+- Target: 100% by Jan
+- Direction: higher is better
+- Format: percentage
+- Formula: `(vendors where IncludeIn1099=true AND TaxPayerId is not empty) / (total vendors where IncludeIn1099=true) × 100`
+- Data: same vendors endpoint. Filter to `TaxInformation.IncludeIn1099 == true`, check if `TaxPayerId` is populated.
+
+---
+
+## Summary of Changes
+
+- Remove AA, LS, MS role cards and summary tiles entirely
+- Remove all KPIs from PM except Portfolio Occupancy Rate and Delinquency Rate
+- Remove all KPIs from APM except Showing Completion Rate
+- Remove all KPIs from BC except Reconciliation Accuracy, Rent Processing Accuracy, Vendor Compliance, and 1099 Compliance
+- Summary bar: 3 tiles only (PM, APM, BC)
+- Role cards: 3 cards only in the grid
+- Total KPIs across all cards: exactly 7

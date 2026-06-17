@@ -1,0 +1,128 @@
+I've added 5 new files to the project for a LeadSimple API integration. I need you to wire them into the existing codebase. Here's exactly what to do:
+
+## New files already in the project (DO NOT modify these):
+- `server/lib/leadsimple.js` -- API client
+- `server/lib/ls-sync.js` -- sync + DB migration
+- `server/lib/ls-aggregator.js` -- KPI calculations + drilldowns
+- `INTEGRATION-GUIDE.md` -- reference doc (don't touch)
+- `LEADSIMPLE-TAB.jsx` -- frontend component code to paste in
+
+## Environment variable:
+The secret `LEADSIMPLE_API_KEY` is already set.
+
+## Changes to existing files (6 edits total):
+
+### 1. server/index.js
+After this line:
+```js
+getDb();
+```
+Add:
+```js
+import { migrateLeadSimple } from "./lib/ls-sync.js";
+migrateLeadSimple();
+```
+
+### 2. server/lib/sync.js
+At the top, after the existing import from `./db.js`, add:
+```js
+import { syncLeadSimple } from "./ls-sync.js";
+```
+
+Then inside the `syncAll` function, right BEFORE the final return statement, add this block:
+```js
+  // LeadSimple sync
+  try {
+    const lsResult = await syncLeadSimple();
+    if (lsResult.errors.length) errors.push(...lsResult.errors.map(e => `[LS] ${e}`));
+    totalRecords += lsResult.totalRecords;
+  } catch (err) {
+    console.error("[sync] LeadSimple sync failed:", err.message);
+    errors.push(`LeadSimple: ${err.message}`);
+  }
+```
+
+### 3. server/lib/aggregator.js
+At the top, after the existing import from `./db.js`, add:
+```js
+import { buildLeadSimpleKpis } from "./ls-aggregator.js";
+```
+
+Then find the return statement at the very end of the `buildDashboard` function. It currently says:
+```js
+  return { dashboard, drilldowns };
+```
+Replace it with:
+```js
+  let lsKpis = null, lsDrilldowns = {}, lsSummary = null;
+  try {
+    const ls = buildLeadSimpleKpis();
+    lsKpis = ls.lsKpis;
+    lsDrilldowns = ls.lsDrilldowns;
+    lsSummary = ls.lsSummary;
+  } catch (err) {
+    console.warn("[agg] LeadSimple KPIs failed:", err.message);
+  }
+
+  return {
+    dashboard: { ...dashboard, lsKpis, lsSummary },
+    drilldowns: { ...drilldowns, ...lsDrilldowns },
+  };
+```
+
+### 4. Limehouse Revamp/Limehouse Dashboard - A.html
+Find:
+```js
+    window.LIMEHOUSE_DATA = payload.dashboard;
+    window.LIMEHOUSE_DRILLDOWNS = payload.drilldowns;
+    window.LIMEHOUSE_SYNC = payload.sync;
+```
+Replace with:
+```js
+    window.LIMEHOUSE_DATA = payload.dashboard;
+    window.LIMEHOUSE_DRILLDOWNS = payload.drilldowns;
+    window.LIMEHOUSE_SYNC = payload.sync;
+    window.LIMEHOUSE_LS_KPIS = payload.dashboard.lsKpis;
+    window.LIMEHOUSE_LS_SUMMARY = payload.dashboard.lsSummary;
+```
+
+### 5. Limehouse Revamp/components/var-a.jsx (4 changes in this file):
+
+**5a.** Find:
+```js
+  const DRILL = window.LIMEHOUSE_DRILLDOWNS;
+```
+Replace with:
+```js
+  const DRILL = window.LIMEHOUSE_DRILLDOWNS;
+  const LS_KPIS = window.LIMEHOUSE_LS_KPIS;
+  const LS_SUMMARY = window.LIMEHOUSE_LS_SUMMARY;
+```
+
+**5b.** Find the tab nav array:
+```js
+          {[{id:'dashboard',label:'Dashboard'},{id:'ceo',label:'CEO View'}].map(t => (
+```
+Replace with:
+```js
+          {[{id:'dashboard',label:'Dashboard'},{id:'leadsimple',label:'LeadSimple'},{id:'ceo',label:'CEO View'}].map(t => (
+```
+
+**5c.** Find the tab content routing:
+```js
+        {tab === 'ceo' ? <CeoView mobile={mobile} SD={SD} showSource={showSource} setDrillKey={setDrillKey} k={k} /> : (<>
+```
+Replace with:
+```js
+        {tab === 'ceo' ? <CeoView mobile={mobile} SD={SD} showSource={showSource} setDrillKey={setDrillKey} k={k} />
+         : tab === 'leadsimple' ? <LeadSimpleView mobile={mobile} setDrillKey={setDrillKey} />
+         : (<>
+```
+
+**5d.** Copy the ENTIRE contents of the `LEADSIMPLE-TAB.jsx` file and paste it into `var-a.jsx` DIRECTLY BEFORE the `CeoView` function definition. The `LEADSIMPLE-TAB.jsx` file contains the `LeadSimpleView` component and its sub-components (`LsRoleCard`, etc.) plus the color/style constants they use.
+
+## Important notes:
+- Do NOT restructure or rename any existing functions.
+- The new "LeadSimple" tab should appear BETWEEN "Dashboard" and "CEO View" in the tab bar.
+- The LeadSimple tab reuses the same drill-down modal that already exists (the `DRILL[drillKey]` pattern). The LS drilldowns are merged into the same drilldowns object on the server side.
+- After making all changes, restart the server. The first sync will create the LS tables and pull data from the LeadSimple API. Check the console for `[ls-sync]` log lines to confirm it worked.

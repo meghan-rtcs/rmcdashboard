@@ -1,0 +1,7 @@
+- [LeadSimple rate limits & sync](leadsimple-sync.md) — LS enforces a per-WINDOW record limit (not just request count); naive clients silently drop completed-task/process pages. Pull is slow, decoupled to overnight cron.
+- [Dashboard cache refresh](dashboard-cache-refresh.md) — index.js serves an in-memory dashboard cache; scheduled syncs only write SQLite, so they need a post-sync hook to rebuild it or overnight data won't surface.
+- [SQLite snapshot-table writes](sqlite-snapshot-writes.md) — tables rebuilt wholesale must replace atomically AND only when the upstream pull fully succeeded, or a rate-limited run wipes/partially-drops good data.
+- [LeadSimple on-time is date-based](leadsimple-on-time-dates.md) — on-time/compliance KPIs compare ET calendar dates (not UTC timestamps); duration metrics (24h/48h) stay timestamp-based.
+- [Frontend JSX bundling](frontend-jsx-bundling.md) — .jsx is compiled server-side once and cached, served at /app-bundle.js; production React, no browser Babel; JSX edits need a restart.
+- [Lease Renewal Rate semantics](leadsimple-renewal-rate.md) — renewed = completed "Lease Renewed" (positive check); denominator = decided only (exclude in-progress Send Lease/Upcoming).
+- [Dashboard location labels](dashboard-location-labels.md) — drilldowns show addresses not IDs; Buildium=propName+unit_number, RentEngine=address.formatted_address (no unit_number field).

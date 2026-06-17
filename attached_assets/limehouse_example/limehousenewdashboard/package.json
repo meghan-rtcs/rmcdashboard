@@ -1,0 +1,16 @@
+{
+  "name": "limehouse-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "@babel/core": "^7.29.7",
+    "@babel/preset-react": "^7.29.7",
+    "better-sqlite3": "^11.8.1",
+    "express": "^4.22.1",
+    "node-cron": "^4.2.1"
+  }
+}

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Limehouse PM — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; }
+  body { font-family: 'Outfit', sans-serif; background: #f4f5f3; color: #1c2119; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  a:hover { color: #3d8c1f; background: #f4f5f3; }
+  #boot {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px; background: #f4f5f3; color: #6b7566;
+    font-size: 13px; z-index: 9999;
+  }
+  #boot .spinner {
+    width: 22px; height: 22px; border: 2px solid #cbd1c4; border-top-color: #3d8c1f;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  #boot.error { color: #c0392b; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="boot"><div class="spinner"></div><div id="boot-msg">Loading data from Buildium and RentEngine…</div></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+
+<script>
+(async function bootstrap() {
+  const bootEl = document.getElementById('boot');
+  const msgEl = document.getElementById('boot-msg');
+  const setMsg = (txt) => { msgEl.textContent = txt; };
+  const setErr = (txt) => { bootEl.classList.add('error'); msgEl.textContent = txt; };
+
+  async function fetchData(retries = 120) {
+    for (let i = 0; i < retries; i++) {
+      const res = await fetch('/api/dashboard', { cache: 'no-store' });
+      if (res.ok) return res.json();
+      if (res.status === 503) {
+        setMsg('Fetching live data from Buildium and RentEngine… (' + (i + 1) + ')');
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      throw new Error('API ' + res.status);
+    }
+    throw new Error('Data still unavailable after retries');
+  }
+
+  try {
+    // Fetch data and the precompiled component bundle in parallel. The bundle is
+    // server-compiled once and ETag-cached, so this is a fast (often 304) request
+    // that overlaps with the data fetch instead of blocking on browser Babel.
+    const [payload, bundleCode] = await Promise.all([
+      fetchData(),
+      fetch('/app-bundle.js').then(r => {
+        if (!r.ok) throw new Error('Failed to load app bundle (' + r.status + ')');
+        return r.text();
+      }),
+    ]);
+
+    window.LIMEHOUSE_DATA = payload.dashboard;
+    window.LIMEHOUSE_DRILLDOWNS = payload.drilldowns;
+    window.LIMEHOUSE_SYNC = payload.sync;
+    window.LIMEHOUSE_LS_KPIS = payload.dashboard.lsKpis;
+    window.LIMEHOUSE_LS_SUMMARY = payload.dashboard.lsSummary;
+
+    const tag = document.createElement('script');
+    tag.text = bundleCode;
+    document.body.appendChild(tag);
+    bootEl.remove();
+  } catch (err) {
+    console.error(err);
+    setErr('Failed to load data: ' + err.message + ' — check that BUILDIUM and RENTENGINE secrets are valid.');
+  }
+})();
+</script>
+</body>
+</html>

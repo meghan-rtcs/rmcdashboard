@@ -1,0 +1,32 @@
+[
+  {
+    "ts": "2026-04-28T23:50:51.961Z",
+    "year": 2026,
+    "month": 3,
+    "day": 28,
+    "totalLeases": 548,
+    "paidLeases": 542,
+    "delinquentLeases": 6,
+    "delinquentTotal": 368
+  },
+  {
+    "ts": "2026-04-29T18:13:12.954Z",
+    "year": 2026,
+    "month": 3,
+    "day": 29,
+    "totalLeases": 548,
+    "paidLeases": 542,
+    "delinquentLeases": 6,
+    "delinquentTotal": 368
+  },
+  {
+    "ts": "2026-05-05T17:55:12.896Z",
+    "year": 2026,
+    "month": 4,
+    "day": 5,
+    "totalLeases": 393,
+    "paidLeases": 374,
+    "delinquentLeases": 19,
+    "delinquentTotal": 27742
+  }
+]

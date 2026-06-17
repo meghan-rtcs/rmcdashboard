@@ -16,11 +16,36 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 getDb();
 
 // ── API: Dashboard data ───────────────────────────────────────────────────
-app.get("/api/dashboard", async (req, res) => {
-  try {
-    // Import aggregator dynamically (will be built next)
+// The dashboard is expensive to build (live AppFolio report calls), and its data
+// only changes after a sync. Cache the built payload in memory with a short TTL
+// and clear it whenever a sync runs, so repeat page loads are instant.
+let dashboardCache = null;
+let dashboardCacheAt = 0;
+let dashboardPromise = null;
+const DASHBOARD_TTL_MS = 5 * 60 * 1000;
+function clearDashboardCache() { dashboardCache = null; dashboardCacheAt = 0; }
+
+// Build the dashboard, coalescing concurrent cache-misses into a single
+// in-flight build so a burst of requests doesn't fan out into many expensive
+// AppFolio report calls.
+function getDashboard() {
+  if (dashboardCache && Date.now() - dashboardCacheAt < DASHBOARD_TTL_MS) {
+    return Promise.resolve(dashboardCache);
+  }
+  if (dashboardPromise) return dashboardPromise;
+  dashboardPromise = (async () => {
     const { buildDashboard } = await import("./lib/aggregator.js");
     const data = await buildDashboard();
+    dashboardCache = data;
+    dashboardCacheAt = Date.now();
+    return data;
+  })().finally(() => { dashboardPromise = null; });
+  return dashboardPromise;
+}
+
+app.get("/api/dashboard", async (req, res) => {
+  try {
+    const data = await getDashboard();
     res.json(data);
   } catch (err) {
     console.error("[api] Dashboard error:", err);
@@ -45,7 +70,7 @@ app.get("/api/drilldown/:key", async (req, res) => {
 let syncPromise = null;
 function runSync() {
   if (syncPromise) return syncPromise;
-  syncPromise = syncAll().finally(() => { syncPromise = null; });
+  syncPromise = syncAll().finally(() => { syncPromise = null; clearDashboardCache(); });
   return syncPromise;
 }
 

@@ -1,2 +1,2 @@
 - [AppFolio report names](appfolio-report-names.md) — report endpoints are account-specific; many plausible names 400, probe before trusting. Confirmed working set + key fields.
-- [RMC dashboard load latency](rmc-dashboard-load.md) — /api/dashboard recomputes all aggregations per request (~2.4s); screenshots catch "Loading…", not a bug. Drilldowns lazy via /api/drilldown/:key registry.
+- [RMC dashboard load & caching](rmc-dashboard-load.md) — /api/dashboard is cached (5min TTL, single-flight, cleared on sync); first build ~2s, rest instant. Chart-rich single-file React frontend; drilldowns lazy via /api/drilldown/:key registry.

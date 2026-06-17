@@ -1,0 +1,242 @@
+# Replit Prompt: Add “Performance by Role” Section to CEO View Tab
+
+## What to Build
+
+Add a new **“Performance by Role”** section BELOW the existing Snapshot KPI cards on the CEO View tab. Do NOT replace the existing cards — this goes underneath them.
+
+This section has two parts:
+
+1. A **summary bar** across the top — 6 role tiles in a single row
+1. A **2-column grid of role cards** below the bar, each containing KPI rows
+
+Match the existing dashboard’s card styling, font sizes, and color conventions. Use the same CSS variables and patterns already in the project.
+
+-----
+
+## Part 1: Summary Bar
+
+A single horizontal row with 6 tiles (one per role), separated by 1px borders. Each tile shows:
+
+- A small colored status dot (green/amber/red/gray)
+- The role abbreviation in small uppercase gray text (e.g. “PM”, “APM”)
+- The role short name in bold (e.g. “Portfolio Manager”, “Assistant PM”)
+- A score like “4/5 on tgt” showing how many KPIs are meeting target out of total — or “—” if no KPIs
+
+The 6 roles in order: **PM** (Portfolio Manager), **APM** (Assistant PM), **LS** (Leasing Spec.), **BC** (Bookkeeping Coord.), **AA** (Admin. Asst.), **MS** (Marketing Spec.)
+
+-----
+
+## Part 2: Role Cards (2-column grid)
+
+Each card has:
+
+### Card Header
+
+- **Score ring** (circle with border color matching overall status): shows “X/Y” (on-target count / total KPIs)
+- **Role name** in bold
+- **Meta line**: “· 3 people” then small colored dots with counts like “● 4 on track ● 1 at risk”
+- **Overall status badge** (top-right pill): “On track” (green), “At risk” (amber), or “Off track” (red)
+
+### KPI Rows (one per KPI inside the card)
+
+Each row has, left to right:
+
+- **Status dot** (10px circle): green if meeting target, amber if within 10% of target, red if below 90% of target, gray if no data
+- **KPI name** in medium-weight text
+- **Source badge**: a small rounded pill saying “BD” (warm tan background `#e8e0d4`, dark text `#6b5b3e`) for Buildium, or “RE” (blue background `#dbeafe`, dark blue text `#1e40af`) for RentEngine
+- **Target** label: small “TARGET” in uppercase above the target value (right-aligned)
+- **Value**: large bold number colored to match the status dot. Percentage values show “%” as a smaller suffix. Day values show “d”. Hour values show “h”.
+
+### RAG (Red/Amber/Green) Logic
+
+- For KPIs where higher is better (`direction: gte`): green if `value >= target`, amber if `value >= target * 0.9`, red if below that
+- For KPIs where lower is better (`direction: lte`): green if `value <= target`, amber if `value <= target * 1.1`, red if above that
+- If value is `None` (no data available): show gray dot and “—” as the value
+
+### Overall Role Status
+
+- If any KPI is red → role is “Off track” (red badge)
+- Else if any KPI is amber → role is “At risk” (amber badge)
+- Else if all KPIs green → “On track” (green badge)
+- If role has no KPIs (Marketing Specialist) → show “—” and gray styling, with a centered italic message “No Buildium / RentEngine KPIs for this role”
+
+-----
+
+## The 7 API-Calculable KPIs (with formulas)
+
+These are the KPIs that have real data from the Buildium and RentEngine APIs. Wire them up to the cached data that the dashboard already pulls.
+
+### KPI 1: Portfolio Occupancy Rate
+
+- **Role**: Portfolio Manager
+- **Source**: BD (Buildium)
+- **Target**: ≥95%
+- **Format**: percentage
+- **Formula**: `(count of units where IsUnitOccupied == true) / (total active units) × 100`
+- **Data**: Already available from `GET /v1/rentals/units` (the units data you already cache). Filter to active properties only (same filter the Buildium tab already uses).
+
+### KPI 2: Delinquency Rate
+
+- **Role**: Portfolio Manager
+- **Source**: BD (Buildium)
+- **Target**: ≤3%
+- **Format**: percentage
+- **Direction**: lower is better
+- **Formula**: `(sum of TotalBalance where TotalBalance > 0 across active leases) / (rent roll total) × 100`
+- **Data**: Already available from `GET /v1/leases/outstandingbalances` (your existing delinquency data) and `GET /v1/leases/rent` (rent schedules). Use the same outstanding balances and rent roll values the Buildium tab already computes.
+
+### KPI 3: Showing Completion Rate
+
+- **Role**: Assistant Property Manager
+- **Source**: RE (RentEngine)
+- **Target**: ≥95%
+- **Format**: percentage
+- **Formula**: `sum(showings_completed across all units) / sum(showings_scheduled across all units) × 100`
+- **Data**: From `GET /reporting/leasing-performance/units/{unitId}` (RentEngine). This is a per-unit endpoint — iterate across all active RentEngine units and aggregate `showings_scheduled` and `showings_completed` fields from the `UnitLeasingPerformance` response. Use the current reporting period (e.g. last 30 days or current month). If this data isn’t already cached, add it to the RentEngine sync.
+
+### KPI 4: Reconciliation Accuracy
+
+- **Role**: Bookkeeping Coordinator
+- **Source**: BD (Buildium)
+- **Target**: 100%
+- **Format**: percentage
+- **Formula**: `(reconciliations without discrepancies) / (total reconciliations in period) × 100`
+- **Data**: From `GET /v1/bankaccounts/{bankAccountId}/reconciliations` (Buildium). Pull reconciliation records for each bank account. If this data isn’t already cached, add it to the Buildium sync. **If not yet available, set to None (will show gray dash).**
+
+### KPI 5: Rent Processing Accuracy
+
+- **Role**: Bookkeeping Coordinator
+- **Source**: BD (Buildium)
+- **Target**: 100%
+- **Format**: percentage
+- **Formula**: `(rent/deposit transactions without reversals) / (total rent/deposit transactions) × 100`
+- **Data**: From `GET /v1/leases/{leaseId}/transactions` and reversed payments. Look for reversed payment transactions as the error signal. **If not yet available, set to None (will show gray dash).**
+
+### KPI 6: Vendor Compliance
+
+- **Role**: Bookkeeping Coordinator
+- **Source**: BD (Buildium)
+- **Target**: 100%
+- **Format**: percentage
+- **Formula**: `(active vendors where TaxPayerId is not empty AND VendorInsurance.ExpirationDate > today) / (total active vendors) × 100`
+- **Data**: From `GET /v1/vendors` with `status=Active` (Buildium). Check `VendorMessage.TaxInformation.TaxPayerId` for W-9 status, and `VendorMessage.VendorInsurance.ExpirationDate` for COI status. If this data isn’t already cached, add it to the Buildium sync.
+
+### KPI 7: 1099 Compliance
+
+- **Role**: Bookkeeping Coordinator
+- **Source**: BD (Buildium)
+- **Target**: 100% by Jan
+- **Format**: percentage
+- **Formula**: `(vendors where IncludeIn1099=true AND TaxPayerId is not empty) / (total vendors where IncludeIn1099=true) × 100`
+- **Data**: Same vendors endpoint as Vendor Compliance. Filter to vendors where `TaxInformation.IncludeIn1099 == true`, then check if `TaxPayerId` is populated.
+
+-----
+
+## The Remaining KPIs (placeholder/manual — show as gray dashes for now)
+
+These KPIs come from systems we don’t have API access to (LeadSimple, zInspector, SharePoint, Google Business Profile) or are audit-based. Set their values to `None` so they render as gray dots with “—”. They’ll be wired up later.
+
+### Portfolio Manager (remaining)
+
+- **Lease Renewal Rate** | BD | Target: ≥70% | `None` for now (requires LeadSimple renewal workflow data)
+- **Owner Retention (TTM)** | BD | Target: ≥90% | `None` for now (requires historical baseline + internal tracking)
+- **Days on Market** | RE | Target: ≤21 days, lower is better | `None` for now (RentEngine leasing performance endpoint has `days_on_market` per unit but also requires Buildium lease execution cross-reference)
+
+### Assistant Property Manager (remaining)
+
+- **Inspection Completion Rate** | BD | Target: 100% | `None` (zInspector)
+- **Property Readiness** | BD | Target: 100% | `None` (LeadSimple)
+- **Documentation Accuracy** | BD | Target: 100% | `None` (SharePoint audit)
+
+### Leasing Specialist
+
+- **Applicant Response Timeliness** | RE | Target: ≥95% in 24h | `None` (LeadSimple + RentEngine)
+- **Document Filing Accuracy** | BD | Target: 100% | `None` (SharePoint audit)
+
+### Bookkeeping Coordinator (remaining)
+
+- **Invoice Processing Time** | BD | Target: ≤7 days, lower is better | `None` for now (requires bill date vs paid date computation)
+- **Owner Disbursement Timeliness** | BD | Target: 100% on time | `None` (requires internal payout log)
+
+### Administrative Assistant
+
+- **Leasing Response Time** | RE | Target: ≤24 biz hrs, lower is better | `None` (LeadSimple + RentEngine)
+- **Application Completion Accuracy** | BD | Target: 100% | `None` (SharePoint audit)
+- **Documentation Accuracy** | BD | Target: 100% | `None` (SharePoint audit)
+
+### Marketing Specialist
+
+- No KPIs (all sourced from content calendar, platform analytics, Google Business Profile — none from Buildium or RentEngine)
+
+-----
+
+## Complete Role Config (for reference)
+
+```
+Role: Portfolio Manager
+  Abbrev: PM | People: 3 people
+  KPIs:
+    1. Portfolio Occupancy Rate    | BD | ≥95%       | higher is better | pct
+    2. Lease Renewal Rate          | BD | ≥70%       | higher is better | pct
+    3. Owner Retention (TTM)       | BD | ≥90%       | higher is better | pct
+    4. Days on Market              | RE | ≤21 days   | lower is better  | days
+    5. Delinquency Rate            | BD | ≤3%        | lower is better  | pct
+
+Role: Assistant Property Manager
+  Abbrev: APM | People: 2 people
+  KPIs:
+    1. Inspection Completion Rate  | BD | 100%       | higher is better | pct
+    2. Showing Completion Rate     | RE | ≥95%       | higher is better | pct
+    3. Property Readiness          | BD | 100%       | higher is better | pct
+    4. Documentation Accuracy      | BD | 100%       | higher is better | pct
+
+Role: Leasing Specialist
+  Abbrev: LS | People: 2 people
+  KPIs:
+    1. Applicant Response Timeliness | RE | ≥95% in 24h | higher is better | pct
+    2. Document Filing Accuracy      | BD | 100%        | higher is better | pct
+
+Role: Bookkeeping Coordinator
+  Abbrev: BC | People: 1 person
+  KPIs:
+    1. Reconciliation Accuracy       | BD | 100%           | higher is better | pct
+    2. Rent Processing Accuracy      | BD | 100%           | higher is better | pct
+    3. Invoice Processing Time       | BD | ≤7 days        | lower is better  | days
+    4. Owner Disbursement Timeliness | BD | 100% on time   | higher is better | pct
+    5. Vendor Compliance             | BD | 100%           | higher is better | pct
+    6. 1099 Compliance               | BD | 100% by Jan    | higher is better | pct
+
+Role: Administrative Assistant
+  Abbrev: AA | People: 1 person
+  KPIs:
+    1. Leasing Response Time              | RE | ≤24 biz hrs | lower is better  | hours
+    2. Application Completion Accuracy    | BD | 100%        | higher is better | pct
+    3. Documentation Accuracy             | BD | 100%        | higher is better | pct
+
+Role: Marketing Specialist
+  Abbrev: MS | People: 1 person
+  KPIs: (none — show empty state message)
+```
+
+-----
+
+## Backend Implementation Notes
+
+- **No new API calls needed for KPIs 1-2** (Occupancy Rate and Delinquency Rate) — reuse the same cached Buildium data the existing tabs already pull.
+- **KPI 3 (Showing Completion Rate)** needs RentEngine’s `/reporting/leasing-performance/units/{unitId}` endpoint. If this isn’t already in the RentEngine sync, add it — iterate over all unit IDs from `GET /units` and aggregate `showings_scheduled` and `showings_completed`.
+- **KPIs 4-7 (Bookkeeping)** need vendor data and reconciliation data from Buildium. The vendors endpoint (`GET /v1/vendors?status=Active`) should be added to the sync if not already there. Reconciliation data is lower priority — set to None if not yet cached.
+- **All other KPIs** should be set to `None` for now. They’ll display as gray dashes in the UI.
+- Compute all KPI values in a dedicated function (e.g. `compute_role_kpis()`) that takes the existing cached Buildium and RentEngine data dicts as input and returns a structured dict the template can loop over.
+- The template should loop over the roles dict to render — don’t hardcode the HTML for each role card.
+
+-----
+
+## Summary
+
+- Add “Performance by Role” section header below existing Snapshot cards
+- Add 6-tile summary bar
+- Add 2-column grid of 6 role cards
+- Each card has a header with score ring + status badge, and KPI rows with dot/name/source badge/target/value
+- Wire up 7 KPIs with real formulas from existing cached data
+- Set remaining KPIs to None (gray dashes)
+- Match existing dashboard styling
