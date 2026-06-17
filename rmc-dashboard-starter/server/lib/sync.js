@@ -193,7 +193,7 @@ export async function syncAll() {
       work_order_type: r.work_order_type || r.type || "",
       assigned_user: r.assigned_user || r.assigned_to || "",
       vendor_name: r.vendor_name || r.vendor || "",
-      created_date: r.created_on || r.created_date || "",
+      created_date: (r.created_at || r.created_on || r.created_date || "").slice(0, 10),
       scheduled_date: r.scheduled_start || r.scheduled_date || "",
       completed_date: r.completed_on || r.completed_date || "",
       total_cost: r.total_cost ? parseFloat(r.total_cost) : 0,

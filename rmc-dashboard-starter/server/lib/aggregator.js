@@ -80,12 +80,12 @@ function buildOccupancy() {
   const vacant = Math.max(totalUnits - occupied, 0);
   const vacantNotRented = num(
     one(
-      "SELECT COUNT(*) c FROM units WHERE occupancy_status LIKE '%Vacant%' AND (lease_to IS NULL OR lease_to = '' OR lease_to < date('now'))"
+      "SELECT COUNT(*) c FROM units WHERE occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Unrented%'"
     ).c
   );
   const vacantRented = num(
     one(
-      "SELECT COUNT(*) c FROM units WHERE occupancy_status LIKE '%Vacant%' AND lease_to >= date('now')"
+      "SELECT COUNT(*) c FROM units WHERE occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Rented%' AND occupancy_status NOT LIKE '%Unrented%'"
     ).c
   );
   const avgDaysVacant = round(
@@ -308,7 +308,7 @@ function buildMaintenance() {
   );
   const avgDaysToComplete = round(
     one(
-      "SELECT AVG(julianday(completed_date) - julianday(created_date)) a FROM work_orders WHERE completed_date IS NOT NULL AND completed_date != '' AND created_date IS NOT NULL AND created_date != ''"
+      "SELECT AVG(julianday(completed_date) - julianday(created_date)) a FROM work_orders WHERE completed_date IS NOT NULL AND completed_date != '' AND created_date IS NOT NULL AND created_date != '' AND completed_date >= created_date"
     ).a
   );
 
@@ -331,7 +331,8 @@ function buildMaintenance() {
   for (const r of typeRows) {
     const t = (r.t || "").toLowerCase();
     if (t.includes("turn")) byType.unitTurn += num(r.c);
-    else if (t.includes("tenant")) byType.tenantRequested += num(r.c);
+    else if (t.includes("tenant") || t.includes("resident"))
+      byType.tenantRequested += num(r.c);
     else byType.internal += num(r.c);
   }
 
@@ -502,9 +503,9 @@ function drillRegistry(range) {
   dd.vacant = make("Vacant Units", unitCols,
     `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE NOT (${occWhere}) ORDER BY property_name, unit_name LIMIT ${LIM}`);
   dd.vacantNotRented = make("Vacant — Not Rented", unitCols,
-    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE occupancy_status LIKE '%Vacant%' AND (lease_to IS NULL OR lease_to = '' OR lease_to < date('now')) ORDER BY property_name LIMIT ${LIM}`);
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Unrented%' ORDER BY property_name LIMIT ${LIM}`);
   dd.vacantRented = make("Vacant — Rented", unitCols,
-    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE occupancy_status LIKE '%Vacant%' AND lease_to >= date('now') ORDER BY property_name LIMIT ${LIM}`);
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Rented%' AND occupancy_status NOT LIKE '%Unrented%' ORDER BY property_name LIMIT ${LIM}`);
   dd.vacancies = make("Vacancies on Market", vacCols,
     `SELECT property_name, unit, status, days_vacant, market_rent, advertised_rent, available_date FROM vacancies ORDER BY days_vacant DESC LIMIT ${LIM}`);
 
