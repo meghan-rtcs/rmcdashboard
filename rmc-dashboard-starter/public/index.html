@@ -76,13 +76,21 @@
       );
     }
 
-    function KpiCard({ label, value, unit, sub, tone }) {
+    const DrillContext = React.createContext(null);
+
+    function KpiCard({ label, value, unit, sub, tone, drill }) {
+      const ctx = React.useContext(DrillContext);
+      const [hover, setHover] = useState(false);
       const accent = tone === "good" ? C.green : tone === "bad" ? C.red : tone === "warn" ? C.amber : C.gold;
+      const clickable = !!drill && !!ctx;
       return (
         <div
+          onClick={clickable ? () => ctx.open(drill) : undefined}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
           style={{
             background: C.card,
-            border: "1px solid " + C.border,
+            border: "1px solid " + (clickable && hover ? accent : C.border),
             borderLeft: "4px solid " + accent,
             borderRadius: 10,
             padding: "16px 18px",
@@ -90,18 +98,88 @@
             flexDirection: "column",
             gap: 6,
             minHeight: 96,
+            cursor: clickable ? "pointer" : "default",
+            boxShadow: clickable && hover ? "0 3px 10px rgba(26,26,26,0.10)" : "none",
+            transition: "box-shadow .12s, border-color .12s",
+            position: "relative",
           }}
         >
-          <span style={{ fontSize: 12, color: C.muted, fontWeight: 600, letterSpacing: 0.3, textTransform: "uppercase" }}>
-            {label}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+            <span style={{ fontSize: 12, color: C.muted, fontWeight: 600, letterSpacing: 0.3, textTransform: "uppercase" }}>
+              {label}
+            </span>
+            {clickable ? (
+              <span style={{ fontSize: 11, color: hover ? accent : C.muted, fontWeight: 700, whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 3 }}>
+                View ↗
+              </span>
+            ) : null}
+          </div>
           <span style={{ fontSize: 28, fontWeight: 700, color: C.black, lineHeight: 1.1 }}>
-            {unit === "$" ? "" : ""}
             {value}
             {unit && unit !== "$" ? <span style={{ fontSize: 16, color: C.muted, marginLeft: 3 }}>{unit}</span> : null}
           </span>
           {sub ? <span style={{ fontSize: 12.5, color: C.muted }}>{sub}</span> : null}
         </div>
+      );
+    }
+
+    function Modal({ title, onClose, children }) {
+      useEffect(() => {
+        const onKey = (e) => { if (e.key === "Escape") onClose(); };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, []);
+      return (
+        <div
+          onClick={onClose}
+          style={{ position: "fixed", inset: 0, background: "rgba(26,26,26,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 14, maxWidth: 980, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 22px", borderBottom: "1px solid " + C.border }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: C.black }}>{title}</h3>
+              <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 24, color: C.muted, lineHeight: 1, padding: 0 }}>×</button>
+            </div>
+            <div style={{ overflow: "auto" }}>{children}</div>
+          </div>
+        </div>
+      );
+    }
+
+    function DrillTable({ drill }) {
+      if (!drill || !drill.rows || !drill.rows.length) return <Empty label="No records behind this metric" />;
+      const cols = drill.cols;
+      const cell = (r, c) => {
+        const v = r[c.key];
+        if (c.money) return fmt.money(v);
+        if (v == null || v === "") return "—";
+        return String(v);
+      };
+      return (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr>
+              {cols.map((c) => (
+                <th key={c.key} style={{ textAlign: c.money ? "right" : "left", padding: "10px 18px", position: "sticky", top: 0, background: C.bg, color: C.muted, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700, borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" }}>
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {drill.rows.map((r, i) => (
+              <tr key={i} style={{ borderBottom: "1px solid " + C.border, background: i % 2 ? "#FFFDF9" : "#fff" }}>
+                {cols.map((c) => (
+                  <td key={c.key} style={{ padding: "9px 18px", textAlign: c.money ? "right" : "left", color: C.black, fontVariantNumeric: c.money ? "tabular-nums" : "normal", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {cell(r, c)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       );
     }
 
@@ -260,41 +338,41 @@
       return (
         <div>
           <div style={grid(220)}>
-            <KpiCard label="Occupancy Rate" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} />
-            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} sub={o.properties + " properties"} />
-            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} sub={fmt.money(f.delinquent) + " outstanding"} />
-            <KpiCard label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} />
+            <KpiCard label="Occupancy Rate" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} drill="occupancy" />
+            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} sub={o.properties + " properties"} drill="units" />
+            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} sub={fmt.money(f.delinquent) + " outstanding"} drill="delinquency" />
+            <KpiCard label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} drill="rentRoll" />
           </div>
 
           <SectionTitle>Occupancy</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Occupied" value={fmt.num(o.occupied)} tone="good" />
-            <KpiCard label="Vacant" value={fmt.num(o.vacant)} tone={o.vacant ? "warn" : "good"} />
-            <KpiCard label="Vacant — Not Rented" value={fmt.num(o.vacantNotRented)} tone="bad" />
-            <KpiCard label="Vacant — Rented" value={fmt.num(o.vacantRented)} />
-            <KpiCard label="Avg Days Vacant" value={fmt.num(o.avgDaysVacant)} unit="days" />
-            <KpiCard label="Units on Market" value={fmt.num(m.unitsOnMarket)} />
+            <KpiCard label="Occupied" value={fmt.num(o.occupied)} tone="good" drill="occupied" />
+            <KpiCard label="Vacant" value={fmt.num(o.vacant)} tone={o.vacant ? "warn" : "good"} drill="vacant" />
+            <KpiCard label="Vacant — Not Rented" value={fmt.num(o.vacantNotRented)} tone="bad" drill="vacantNotRented" />
+            <KpiCard label="Vacant — Rented" value={fmt.num(o.vacantRented)} drill="vacantRented" />
+            <KpiCard label="Avg Days Vacant" value={fmt.num(o.avgDaysVacant)} unit="days" drill="vacancies" />
+            <KpiCard label="Units on Market" value={fmt.num(m.unitsOnMarket)} drill="vacancies" />
           </div>
 
           <SectionTitle>Leasing</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} sub={l.renewalsCount + " renewed"} />
-            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} />
-            <KpiCard label="Fixed Leases" value={fmt.num(l.fixedLeases)} />
-            <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub="trailing 12 mo" />
-            <KpiCard label="Move-ins" value={fmt.num(l.moveins)} sub="trailing 12 mo" />
-            <KpiCard label="Apps / Move-in" value={fmt.num(l.appsPerMovein)} />
+            <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} sub={l.renewalsCount + " renewed"} drill="renewals" />
+            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} drill="mtm" />
+            <KpiCard label="Fixed Leases" value={fmt.num(l.fixedLeases)} drill="fixedLeases" />
+            <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub="trailing 12 mo" drill="applications" />
+            <KpiCard label="Move-ins" value={fmt.num(l.moveins)} sub="trailing 12 mo" drill="moveins" />
+            <KpiCard label="Apps / Move-in" value={fmt.num(l.appsPerMovein)} drill="applications" />
           </div>
 
           <SectionTitle>Marketing & Funnel</SectionTitle>
           <div style={{ ...grid(260), alignItems: "stretch" }}>
             <div style={grid(150)}>
-              <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} />
-              <KpiCard label="Active Prospects" value={fmt.num(m.activeProspects)} />
-              <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} />
-              <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" />
-              <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone={m.noShows ? "warn" : "good"} />
-              <KpiCard label="Show Completion" value={fmt.pct(m.showingCompletionRate)} />
+              <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} drill="inquiries" />
+              <KpiCard label="Active Prospects" value={fmt.num(m.activeProspects)} drill="activeProspects" />
+              <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
+              <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" drill="showingsCompleted" />
+              <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone={m.noShows ? "warn" : "good"} drill="noShows" />
+              <KpiCard label="Show Completion" value={fmt.pct(m.showingCompletionRate)} drill="showings" />
             </div>
             <Card>
               <h3 style={{ fontSize: 13, color: C.muted, marginBottom: 12, fontWeight: 600 }}>Leasing Funnel</h3>
@@ -304,22 +382,22 @@
 
           <SectionTitle>Financials</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} />
-            <KpiCard label="Current" value={fmt.money(f.aging.current)} />
-            <KpiCard label="30+ Days" value={fmt.money(f.aging.thirtyPlus)} tone="warn" />
-            <KpiCard label="60+ Days" value={fmt.money(f.aging.sixtyPlus)} tone="warn" />
-            <KpiCard label="90+ Days" value={fmt.money(f.aging.ninetyPlus)} tone="bad" />
-            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" />
+            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
+            <KpiCard label="Current" value={fmt.money(f.aging.current)} drill="delinquencyCurrent" />
+            <KpiCard label="30+ Days" value={fmt.money(f.aging.thirtyPlus)} tone="warn" drill="delinquency30" />
+            <KpiCard label="60+ Days" value={fmt.money(f.aging.sixtyPlus)} tone="warn" drill="delinquency60" />
+            <KpiCard label="90+ Days" value={fmt.money(f.aging.ninetyPlus)} tone="bad" drill="delinquency90" />
+            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
           </div>
 
           <SectionTitle>Maintenance</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} />
-            <KpiCard label="Avg Days to Complete" value={fmt.num(w.avgDaysToComplete)} unit="days" />
-            <KpiCard label="Urgent" value={fmt.num(w.byPriority.urgent)} tone="bad" />
-            <KpiCard label="Normal" value={fmt.num(w.byPriority.normal)} />
-            <KpiCard label="Low" value={fmt.num(w.byPriority.low)} />
-            <KpiCard label="Unit Turns" value={fmt.num(w.byType.unitTurn)} />
+            <KpiCard label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} drill="openWorkOrders" />
+            <KpiCard label="Avg Days to Complete" value={fmt.num(w.avgDaysToComplete)} unit="days" drill="completedWorkOrders" />
+            <KpiCard label="Urgent" value={fmt.num(w.byPriority.urgent)} tone="bad" drill="woUrgent" />
+            <KpiCard label="Normal" value={fmt.num(w.byPriority.normal)} drill="woNormal" />
+            <KpiCard label="Low" value={fmt.num(w.byPriority.low)} drill="woLow" />
+            <KpiCard label="Unit Turns" value={fmt.num(w.byType.unitTurn)} drill="woUnitTurn" />
           </div>
 
           <SectionTitle>Trends</SectionTitle>
@@ -362,18 +440,18 @@
 
           <SectionTitle>Showings</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Total (30d)" value={fmt.num(m.showingsTotal)} />
-            <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" />
-            <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone="warn" />
-            <KpiCard label="Completion Rate" value={fmt.pct(m.showingCompletionRate)} />
+            <KpiCard label="Total (30d)" value={fmt.num(m.showingsTotal)} drill="showings" />
+            <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" drill="showingsCompleted" />
+            <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone="warn" drill="noShows" />
+            <KpiCard label="Completion Rate" value={fmt.pct(m.showingCompletionRate)} drill="showings" />
           </div>
 
           <SectionTitle>Application Pipeline</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Inquiries" value={fmt.num(m.funnel.inquiries)} />
-            <KpiCard label="Applications" value={fmt.num(m.funnel.applications)} />
-            <KpiCard label="Approved" value={fmt.num(m.funnel.approved)} tone="good" />
-            <KpiCard label="Converted" value={fmt.num(m.funnel.converted)} tone="good" />
+            <KpiCard label="Inquiries" value={fmt.num(m.funnel.inquiries)} drill="inquiries" />
+            <KpiCard label="Applications" value={fmt.num(m.funnel.applications)} drill="applications" />
+            <KpiCard label="Approved" value={fmt.num(m.funnel.approved)} tone="good" drill="applications" />
+            <KpiCard label="Converted" value={fmt.num(m.funnel.converted)} tone="good" drill="applications" />
           </div>
         </div>
       );
@@ -416,34 +494,34 @@
         <div>
           <SectionTitle>Financial Deep Dive</SectionTitle>
           <div style={grid(200)}>
-            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" />
-            <KpiCard label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} />
-            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" />
-            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} />
+            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
+            <KpiCard label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
+            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" drill="delinquency" />
+            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
           </div>
 
           <SectionTitle>Delinquency Aging</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Current" value={fmt.money2(f.aging.current)} />
-            <KpiCard label="30+ Days" value={fmt.money2(f.aging.thirtyPlus)} tone="warn" />
-            <KpiCard label="60+ Days" value={fmt.money2(f.aging.sixtyPlus)} tone="warn" />
-            <KpiCard label="90+ Days" value={fmt.money2(f.aging.ninetyPlus)} tone="bad" />
+            <KpiCard label="Current" value={fmt.money2(f.aging.current)} drill="delinquencyCurrent" />
+            <KpiCard label="30+ Days" value={fmt.money2(f.aging.thirtyPlus)} tone="warn" drill="delinquency30" />
+            <KpiCard label="60+ Days" value={fmt.money2(f.aging.sixtyPlus)} tone="warn" drill="delinquency60" />
+            <KpiCard label="90+ Days" value={fmt.money2(f.aging.ninetyPlus)} tone="bad" drill="delinquency90" />
           </div>
 
           <SectionTitle>Renewal Performance</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} />
-            <KpiCard label="Renewals" value={fmt.num(l.renewalsCount)} />
-            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} />
-            <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" />
+            <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} drill="renewals" />
+            <KpiCard label="Renewals" value={fmt.num(l.renewalsCount)} drill="renewals" />
+            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} drill="mtm" />
+            <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
           </div>
 
           <SectionTitle>Portfolio</SectionTitle>
           <div style={grid(180)}>
-            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} />
-            <KpiCard label="Properties" value={fmt.num(o.properties)} />
-            <KpiCard label="Owners" value={fmt.num(o.owners)} />
-            <KpiCard label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} />
+            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} drill="units" />
+            <KpiCard label="Properties" value={fmt.num(o.properties)} drill="properties" />
+            <KpiCard label="Owners" value={fmt.num(o.owners)} drill="owners" />
+            <KpiCard label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} drill="occupancy" />
           </div>
 
           <SectionTitle>Revenue Trend</SectionTitle>
@@ -461,6 +539,9 @@
       const [error, setError] = useState(null);
       const [tab, setTab] = useState("dashboard");
       const [syncing, setSyncing] = useState(false);
+      const [activeDrill, setActiveDrill] = useState(null);
+      const [drillData, setDrillData] = useState(null);
+      const [drillLoading, setDrillLoading] = useState(false);
 
       const load = () => {
         setLoading(true);
@@ -489,15 +570,26 @@
         { id: "ceo", label: "CEO View" },
       ];
 
+      const openDrill = (key) => {
+        setActiveDrill(key);
+        setDrillData(null);
+        setDrillLoading(true);
+        fetch("/api/drilldown/" + encodeURIComponent(key))
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then((j) => setDrillData(j))
+          .catch((e) => setDrillData({ title: "Could not load records", cols: [], rows: [] }))
+          .finally(() => setDrillLoading(false));
+      };
+      const closeDrill = () => { setActiveDrill(null); setDrillData(null); };
+      const ctxValue = { open: openDrill };
+
       return (
+        <DrillContext.Provider value={ctxValue}>
         <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-          <header style={{ background: C.black, color: "#fff", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-            <div>
-              <h1 style={{ fontSize: 20, fontWeight: 800, letterSpacing: 0.2 }}>Real Management Company</h1>
-              <p style={{ fontSize: 12.5, color: C.gold, marginTop: 2, fontWeight: 600 }}>See what's possible.℠</p>
-            </div>
+          <header style={{ background: "#fff", borderBottom: "1px solid " + C.border, padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <img src="/logo.png" alt="Real Management Company" style={{ height: 60, width: "auto", display: "block" }} />
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <span style={{ fontSize: 12, color: "#bdbdbd" }}>
+              <span style={{ fontSize: 12, color: C.muted }}>
                 {syncedAt ? "Last sync: " + new Date(syncedAt).toLocaleString() : "Not synced yet"}
               </span>
               <button
@@ -558,7 +650,18 @@
               </>
             ) : null}
           </main>
+
+          {activeDrill ? (
+            <Modal title={drillData ? drillData.title : "Loading…"} onClose={closeDrill}>
+              {drillLoading ? (
+                <div style={{ padding: 48, textAlign: "center", color: C.muted, fontSize: 13 }}>Loading records…</div>
+              ) : (
+                <DrillTable drill={drillData} />
+              )}
+            </Modal>
+          ) : null}
         </div>
+        </DrillContext.Provider>
       );
     }
 

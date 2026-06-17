@@ -1,1 +1,2 @@
 - [AppFolio report names](appfolio-report-names.md) — report endpoints are account-specific; many plausible names 400, probe before trusting. Confirmed working set + key fields.
+- [RMC dashboard load latency](rmc-dashboard-load.md) — /api/dashboard recomputes all aggregations per request (~2.4s); screenshots catch "Loading…", not a bug. Drilldowns lazy via /api/drilldown/:key registry.

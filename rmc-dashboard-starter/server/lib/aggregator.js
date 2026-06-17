@@ -362,6 +362,198 @@ async function buildCharts() {
   return { monthlyRevenue, occupancyTrend, delinquencyTrend };
 }
 
+// ── Drilldowns ────────────────────────────────────────────────────────────
+// Raw records behind every KPI tile, keyed by the same drill key the frontend
+// passes on each card. Each entry: { title, cols:[{key,label,money?,pct?}], rows }.
+
+function drillRegistry() {
+  const dd = {};
+  const make = (title, cols, sql) => ({ title, cols, sql });
+
+  const unitCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit_name", label: "Unit" },
+    { key: "tenant_name", label: "Tenant" },
+    { key: "current_rent", label: "Rent", money: true },
+    { key: "occupancy_status", label: "Status" },
+    { key: "lease_to", label: "Lease End" },
+  ];
+  const delCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit", label: "Unit" },
+    { key: "tenant_name", label: "Tenant" },
+    { key: "amount_receivable", label: "Total Due", money: true },
+    { key: "current_amount", label: "Current", money: true },
+    { key: "thirty_plus", label: "30+", money: true },
+    { key: "sixty_plus", label: "60+", money: true },
+    { key: "ninety_plus", label: "90+", money: true },
+  ];
+  const vacCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit", label: "Unit" },
+    { key: "status", label: "Status" },
+    { key: "days_vacant", label: "Days Vacant" },
+    { key: "market_rent", label: "Market Rent", money: true },
+    { key: "advertised_rent", label: "Advertised", money: true },
+    { key: "available_date", label: "Available" },
+  ];
+  const appCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit", label: "Unit" },
+    { key: "applicant_name", label: "Applicant" },
+    { key: "status", label: "Status" },
+    { key: "received_date", label: "Received" },
+    { key: "decision_date", label: "Decision" },
+  ];
+  const gcCols = [
+    { key: "prospect_name", label: "Prospect" },
+    { key: "property_name", label: "Property" },
+    { key: "source", label: "Source" },
+    { key: "status", label: "Status" },
+    { key: "received_date", label: "Received" },
+    { key: "assigned_user", label: "Agent" },
+  ];
+  const showCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit", label: "Unit" },
+    { key: "prospect_name", label: "Prospect" },
+    { key: "status", label: "Status" },
+    { key: "showing_date", label: "Date" },
+    { key: "assigned_user", label: "Agent" },
+  ];
+  const woCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit", label: "Unit" },
+    { key: "description", label: "Description" },
+    { key: "priority", label: "Priority" },
+    { key: "work_order_type", label: "Type" },
+    { key: "status", label: "Status" },
+    { key: "created_date", label: "Created" },
+  ];
+  const renCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit", label: "Unit" },
+    { key: "tenant_name", label: "Tenant" },
+    { key: "renewal_status", label: "Status" },
+    { key: "lease_end", label: "Lease End" },
+    { key: "previous_rent", label: "Prev Rent", money: true },
+    { key: "new_rent", label: "New Rent", money: true },
+  ];
+
+  const LIM = 1000;
+  const occWhere =
+    "occupancy_status IN ('Occupied','Current') OR (tenant_name IS NOT NULL AND tenant_name != '')";
+
+  // Occupancy
+  dd.occupancy = make("Occupied Units", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE ${occWhere} ORDER BY property_name, unit_name LIMIT ${LIM}`);
+  dd.occupied = dd.occupancy;
+  dd.units = make("All Units", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units ORDER BY property_name, unit_name LIMIT ${LIM}`);
+  dd.rentRoll = make("Units with Rent", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE current_rent > 0 ORDER BY current_rent DESC LIMIT ${LIM}`);
+  dd.vacant = make("Vacant Units", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE NOT (${occWhere}) ORDER BY property_name, unit_name LIMIT ${LIM}`);
+  dd.vacantNotRented = make("Vacant — Not Rented", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE occupancy_status LIKE '%Vacant%' AND (lease_to IS NULL OR lease_to = '' OR lease_to < date('now')) ORDER BY property_name LIMIT ${LIM}`);
+  dd.vacantRented = make("Vacant — Rented", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE occupancy_status LIKE '%Vacant%' AND lease_to >= date('now') ORDER BY property_name LIMIT ${LIM}`);
+  dd.vacancies = make("Vacancies on Market", vacCols,
+    `SELECT property_name, unit, status, days_vacant, market_rent, advertised_rent, available_date FROM vacancies ORDER BY days_vacant DESC LIMIT ${LIM}`);
+
+  // Leasing
+  dd.renewals = make("Renewals (last 12 mo)", renCols,
+    `SELECT property_name, unit, tenant_name, renewal_status, lease_end, previous_rent, new_rent FROM renewals WHERE lease_end >= date('now','-12 months') ORDER BY lease_end DESC LIMIT ${LIM}`);
+  dd.mtm = make("Month-to-Month Leases", renCols,
+    `SELECT property_name, unit, tenant_name, renewal_status, lease_end, previous_rent, new_rent FROM renewals WHERE renewal_status = 'Month To Month' LIMIT ${LIM}`);
+  dd.fixedLeases = make("Active Fixed Leases", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, lease_to FROM units WHERE lease_to >= date('now') ORDER BY lease_to LIMIT ${LIM}`);
+  dd.applications = make("Applications (last 12 mo)", appCols,
+    `SELECT property_name, unit, applicant_name, status, received_date, decision_date FROM applications WHERE received_date >= date('now','-12 months') ORDER BY received_date DESC LIMIT ${LIM}`);
+  dd.moveins = make("Move-ins (last 12 mo)", unitCols,
+    `SELECT property_name, unit_name, tenant_name, current_rent, occupancy_status, move_in_date AS lease_to FROM units WHERE move_in_date >= date('now','-12 months') ORDER BY move_in_date DESC LIMIT ${LIM}`);
+
+  // Marketing
+  dd.inquiries = make("Inquiries (last 30 days)", gcCols,
+    `SELECT prospect_name, property_name, source, status, received_date, assigned_user FROM guest_cards WHERE received_date >= date('now','-30 days') ORDER BY received_date DESC LIMIT ${LIM}`);
+  dd.activeProspects = make("Active Prospects", gcCols,
+    `SELECT prospect_name, property_name, source, status, received_date, assigned_user FROM guest_cards WHERE LOWER(status) IN ('active','prequalified','waitlisted') ORDER BY received_date DESC LIMIT ${LIM}`);
+  dd.showings = make("Showings (last 30 days)", showCols,
+    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE showing_date >= date('now','-30 days') ORDER BY showing_date DESC LIMIT ${LIM}`);
+  dd.showingsCompleted = make("Completed Showings", showCols,
+    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE status = 'Completed' ORDER BY showing_date DESC LIMIT ${LIM}`);
+  dd.noShows = make("No-Show Showings", showCols,
+    `SELECT property_name, unit, prospect_name, status, showing_date, assigned_user FROM showings WHERE status = 'No Show' ORDER BY showing_date DESC LIMIT ${LIM}`);
+
+  // Financials
+  dd.delinquency = make("Delinquent Accounts", delCols,
+    `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE amount_receivable > 0 ORDER BY amount_receivable DESC LIMIT ${LIM}`);
+  dd.delinquencyCurrent = make("Current Balances", delCols,
+    `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE current_amount > 0 ORDER BY current_amount DESC LIMIT ${LIM}`);
+  dd.delinquency30 = make("30+ Days Past Due", delCols,
+    `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE thirty_plus > 0 ORDER BY thirty_plus DESC LIMIT ${LIM}`);
+  dd.delinquency60 = make("60+ Days Past Due", delCols,
+    `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE sixty_plus > 0 ORDER BY sixty_plus DESC LIMIT ${LIM}`);
+  dd.delinquency90 = make("90+ Days Past Due", delCols,
+    `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE ninety_plus > 0 ORDER BY ninety_plus DESC LIMIT ${LIM}`);
+
+  // Maintenance
+  const woOpen = "status NOT IN ('Completed','Canceled','Completed No Need To Bill')";
+  dd.openWorkOrders = make("Open Work Orders", woCols,
+    `SELECT property_name, unit, description, priority, work_order_type, status, created_date FROM work_orders WHERE ${woOpen} ORDER BY created_date DESC LIMIT ${LIM}`);
+  dd.completedWorkOrders = make("Completed Work Orders", woCols,
+    `SELECT property_name, unit, description, priority, work_order_type, status, created_date FROM work_orders WHERE completed_date IS NOT NULL AND completed_date != '' ORDER BY completed_date DESC LIMIT ${LIM}`);
+  const urgentLike = "(LOWER(priority) LIKE '%urgent%' OR LOWER(priority) LIKE '%high%' OR LOWER(priority) LIKE '%emergency%')";
+  const lowLike = "LOWER(priority) LIKE '%low%'";
+  dd.woUrgent = make("Urgent / High Priority Work Orders", woCols,
+    `SELECT property_name, unit, description, priority, work_order_type, status, created_date FROM work_orders WHERE ${urgentLike} ORDER BY created_date DESC LIMIT ${LIM}`);
+  dd.woLow = make("Low Priority Work Orders", woCols,
+    `SELECT property_name, unit, description, priority, work_order_type, status, created_date FROM work_orders WHERE ${lowLike} ORDER BY created_date DESC LIMIT ${LIM}`);
+  dd.woNormal = make("Normal Priority Work Orders", woCols,
+    `SELECT property_name, unit, description, priority, work_order_type, status, created_date FROM work_orders WHERE NOT ${urgentLike} AND NOT ${lowLike} ORDER BY created_date DESC LIMIT ${LIM}`);
+  dd.woUnitTurn = make("Unit Turn Work Orders", woCols,
+    `SELECT property_name, unit, description, priority, work_order_type, status, created_date FROM work_orders WHERE LOWER(work_order_type) LIKE '%turn%' ORDER BY created_date DESC LIMIT ${LIM}`);
+
+  // Portfolio
+  dd.properties = make("Properties", [
+    { key: "property_name", label: "Property" },
+    { key: "address", label: "Address" },
+    { key: "city", label: "City" },
+    { key: "state", label: "State" },
+    { key: "unit_count", label: "Units" },
+    { key: "property_type", label: "Type" },
+  ], `SELECT property_name, address, city, state, unit_count, property_type FROM properties ORDER BY property_name LIMIT ${LIM}`);
+  dd.owners = make("Owners", [
+    { key: "owner_name", label: "Owner" },
+    { key: "email", label: "Email" },
+    { key: "phone", label: "Phone" },
+    { key: "property_count", label: "Properties" },
+    { key: "status", label: "Status" },
+  ], `SELECT owner_name, email, phone, property_count, status FROM owners ORDER BY owner_name LIMIT ${LIM}`);
+
+  return dd;
+}
+
+// Returns a single drilldown { title, cols, rows } for the given key, or null.
+export async function getDrilldown(key) {
+  if (key === "income" || key === "grossIncome" || key === "netIncome") {
+    const charts = await buildCharts();
+    return {
+      title: "Monthly Income & Expense (12 mo)",
+      cols: [
+        { key: "month", label: "Month" },
+        { key: "gross", label: "Gross Income", money: true },
+        { key: "expense", label: "Expense", money: true },
+        { key: "net", label: "Net Income", money: true },
+      ],
+      rows: (charts.monthlyRevenue || []).slice().reverse(),
+    };
+  }
+  const def = drillRegistry()[key];
+  if (!def) return null;
+  return { title: def.title, cols: def.cols, rows: def.sql ? many(def.sql) : [] };
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────
 
 export async function buildDashboard() {

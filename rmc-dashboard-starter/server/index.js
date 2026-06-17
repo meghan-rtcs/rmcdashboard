@@ -28,6 +28,19 @@ app.get("/api/dashboard", async (req, res) => {
   }
 });
 
+// ── API: Drilldown (raw records behind a single KPI) ──────────────────────
+app.get("/api/drilldown/:key", async (req, res) => {
+  try {
+    const { getDrilldown } = await import("./lib/aggregator.js");
+    const dd = await getDrilldown(req.params.key);
+    if (!dd) return res.status(404).json({ error: "Unknown drilldown: " + req.params.key });
+    res.json(dd);
+  } catch (err) {
+    console.error("[api] Drilldown error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Single-flight sync guard (shared by manual + scheduled triggers) ───────
 let syncPromise = null;
 function runSync() {
