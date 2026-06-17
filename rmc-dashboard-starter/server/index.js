@@ -28,10 +28,18 @@ app.get("/api/dashboard", async (req, res) => {
   }
 });
 
+// ── Single-flight sync guard (shared by manual + scheduled triggers) ───────
+let syncPromise = null;
+function runSync() {
+  if (syncPromise) return syncPromise;
+  syncPromise = syncAll().finally(() => { syncPromise = null; });
+  return syncPromise;
+}
+
 // ── API: Trigger sync ─────────────────────────────────────────────────────
 app.post("/api/sync", async (req, res) => {
   try {
-    const result = await syncAll();
+    const result = await runSync();
     res.json(result);
   } catch (err) {
     console.error("[api] Sync error:", err);
@@ -46,17 +54,12 @@ app.get("/api/sync/status", (req, res) => {
 });
 
 // ── Scheduled sync (every 2 hours) ───────────────────────────────────────
-let syncRunning = false;
 async function scheduledSync() {
-  if (syncRunning) return;
-  syncRunning = true;
   try {
     console.log("[scheduler] Starting sync...");
-    await syncAll();
+    await runSync();
   } catch (err) {
     console.error("[scheduler] Sync failed:", err.message);
-  } finally {
-    syncRunning = false;
   }
 }
 

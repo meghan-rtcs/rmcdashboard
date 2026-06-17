@@ -1,0 +1,230 @@
+# RMC Dashboard — Build the Aggregator + Frontend
+
+You are building a KPI dashboard for Real Management Company (RMC). The backend infrastructure is already in place (appfolio.js, db.js, sync.js, server/index.js). You need to build TWO files:
+
+1. `server/lib/aggregator.js` — queries SQLite + live AppFolio API calls → returns dashboard JSON
+2. `public/index.html` — single HTML file that loads React via CDN and renders the entire dashboard
+
+## CRITICAL: The design MUST match the Limehouse dashboard exactly
+
+This dashboard is a re-skin of an existing Limehouse PM dashboard. The EXACT same layout, spacing, component patterns, chart types, and interaction model must be replicated. The ONLY changes are:
+- **Branding**: RMC colors instead of Limehouse green
+- **Data source**: AppFolio instead of Buildium/RentEngine
+- **No LeadSimple tab**: replaced with a "Leasing & Marketing" tab
+- **Source pills**: show "AF" (AppFolio) instead of "BD"/"RE"
+
+## RMC Color Palette (replacing Limehouse green #3d8c1f)
+
+```
+Primary accent:     #D4881A  (warm gold — used where Limehouse used #3d8c1f)
+Primary hover:      #B8750F  (darker gold)
+Primary light bg:   #FDF4E6  (warm cream — replaces #e8f0e0)
+Primary light pill:  rgba(212,136,26,0.10)  (gold tint — replaces rgba(61,140,31,0.10))
+
+Page background:    #F7F4F0  (warm gray — replaces #f4f5f3)
+Card background:    #FFFFFF
+Card border:        #E8E0D4  (warm border — replaces #e5e8e2)
+Card shadow:        0 1px 2px rgba(0,0,0,0.03)
+
+Text primary:       #1A1A1A  (replaces #1c2119)
+Text secondary:     #6B6155  (warm muted — replaces #6b7566)
+Text muted:         #A69D93  (replaces #9aa595)
+Divider:            #EDE7DF  (replaces #eef0eb)
+
+Sync dot green:     #D4881A  (gold dot instead of green)
+Blue accent:        #2471a3  (keep as-is for certain charts)
+Red accent:         #c0392b  (keep as-is for delinquency/bad metrics)
+Amber accent:       #d68910  (keep as-is for warnings)
+Green (good):       #2D8C3E  (for positive deltas only)
+```
+
+## Font: Outfit (same as Limehouse)
+```html
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+```
+
+## ARCHITECTURE: Multi-file frontend loaded by HTML
+
+The frontend has this structure (same as Limehouse):
+
+### `public/index.html` (entry point, ~85 lines)
+Loads React 18 + Babel from CDN, fetches `/api/dashboard`, stores result on window, then loads component scripts in order via `<script type="text/babel" src="...">` tags:
+```
+1. components/shared.jsx    — all reusable components (Sparkline, KPI, charts, etc.)
+2. components/dashboard.jsx — main dashboard + CEO view + Leasing tab
+3. app.jsx                  — root App component, renders everything
+```
+
+### `public/components/shared.jsx` (~580 lines)
+This is the COMPLETE component library. Port the ENTIRE Limehouse shared.jsx but with RMC colors:
+- `fmt` — number/money/percent/delta formatters
+- `Sparkline` — inline SVG sparkline (used in every KPI tile)
+- `DeltaPill` — green/red YoY delta badge
+- `SourcePill` — data source badge (change to show "AF" for AppFolio with gold color)
+- `SectionHeader` — uppercase section label with horizontal rule
+- `Modal` + `DrillTable` — click-to-drill data tables
+- `MiniBars` — single-series bar chart with hover tooltips
+- `DualBars` — dual-series bar chart (e.g., rent collected by 3rd vs 10th)
+- `Donut` — ring chart for categorical breakdowns
+- `LineChart` — multi-series line chart with axes, gridlines, hover crosshair + tooltip
+- `HBars` — horizontal bar chart (for aging buckets, source breakdown)
+- `Funnel` — step funnel visualization (prospects → showings → apps → move-ins)
+- `DashHeader` — sticky header with logo, sync status, date range selector, sync button
+
+The SourcePill map should be:
+```js
+const map = {
+  AF: { label: 'AF', title: 'AppFolio', color: '#D4881A', bg: 'rgba(212,136,26,0.08)' },
+};
+```
+
+### `public/components/dashboard.jsx` (~1000 lines)
+The main dashboard. Key patterns to replicate EXACTLY from Limehouse:
+
+**KPI Tile Component:**
+```jsx
+function KPI({ label, value, unit, delta, spark, sparkColor, source, onClick, big, mobile, showSource, accent, live }) {
+  // - White card with warm border, rounded corners (10px)
+  // - Top row: uppercase label (9.5px, 700 weight, 0.07em tracking) + source pill + drill arrow
+  // - Main row: LARGE number (28-36px, weight 300, tabular-nums) + sparkline on right
+  // - Bottom row: DeltaPill with "vs last yr"
+  // - Hover: border color warms, subtle box-shadow
+  // - cursor:pointer if clickable (onClick for drill-down)
+}
+```
+
+**ChartCard Component:**
+```jsx
+function ChartCard({ title, subtitle, legend, children, mobile, onClick }) {
+  // White card wrapper for any chart
+  // Top: uppercase title + subtitle + optional legend (flex right-aligned)
+  // Body: children (any chart component)
+}
+```
+
+**Main Dashboard Tab Layout (matches Limehouse EXACTLY):**
+```
+Header (sticky, 58px height, logo + sync status + date selector + sync button)
+Tab bar (Dashboard | Leasing & Marketing | CEO View)
+Range banner ("LAST 12 MONTHS · Showing data for the past 12 months · Tap any tile...")
+
+Content area (max-width: 1480px, centered):
+
+"Top of Mind" section header
+  4-column grid:
+    [Delinquent total] [Occupancy rate] [Renewal rate] [Net doors]
+    (big=true, with sparklines)
+
+"Financials" section header
+  3-column grid: [Rent by 3rd] [Rent by 10th] [Avg rent/door]
+  2-column grid: [Avg SD withheld $] [Avg SD withheld %]
+  2-column grid (2fr 1fr): [Rent collection 12-month DualBars chart] [Delinquency aging HBars]
+
+"Occupancy & Leasing" section header
+  4-column grid: [Vacant not rented] [Vacant rented] [Avg days vacant] [Units on market]
+  3-column grid: [Move-ins] [Apps submitted] [Apps per move-in]
+  2-column grid: [Doors added/lost DualBars chart] [Renewals by month MiniBars chart]
+
+"Marketing" section header
+  4-column grid: [Total inquiries] [Active prospects] [Showings completed] [No-shows]
+  2-column grid (2fr 1fr): [Inquiry sources HBars] [Leasing funnel Funnel]
+
+"Maintenance" section header
+  3-column grid: [Open WOs] [Avg days to complete] [WOs by priority Donut]
+```
+
+**Leasing & Marketing Tab:**
+  Deeper dive: showing stats by agent, application pipeline, vacancy detail list, source breakdown
+
+**CEO View Tab:**
+  Password protected (password: "RMCRTCS"):
+  - YoY income charts (gross/net/RPU — LineChart with multi-year overlay)
+  - Delinquency deep dive
+  - Renewal performance detail
+
+**Drill-down Modal:**
+Every KPI tile is clickable. On click, shows Modal with DrillTable showing the raw records behind that metric. The drill data comes from `window.RMC_DRILLDOWNS[drillKey]` — same pattern as Limehouse.
+
+## AGGREGATOR (`server/lib/aggregator.js`)
+
+Reference METRIC-MAPPING.md for every calculation. The aggregator must return:
+
+```js
+{
+  dashboard: {
+    meta: { syncedAt, totalUnits, totalProperties, totalOwners, activeLeases },
+    occupancy: { rate, totalUnits, occupied, vacantNotRented, vacantRented, avgDaysVacant, doorsAdded, doorsLost, netDoors, ownersTotal },
+    leasing: { renewalRate, renewalsCount, mtmLeases, fixedLeases, appsSubmitted, moveins, appsPerMovein },
+    financials: { delinquent, delinquentCount, delinquencyRate, avgRentPerDoor, grossIncome, netIncome, rentCollectedBy3rd, rentCollectedBy10th },
+    marketing: { inquiries, activeProspects, showingsTotal, showingsCompleted, showingCompletionRate, noShows, unitsOnMarket },
+    maintenance: { openWorkOrders, avgDaysToComplete },
+    // Chart data arrays (12 months):
+    rentCollectionByMonth: [{ month, by3rd, by10th }],
+    incomeMonthly: [{ month, gross, net, expense }],
+    occupancyTrend: [{ month, rate }],
+    doorsMonthly: [{ month, added, lost }],
+    renewalsByMonth: [{ month, renewed, notRenewed }],
+    agingBuckets: [{ label, amount, color }],
+    inquiryBySource: [{ source, count }],
+    marketingFunnel: [{ label, value }],
+    spark: { occupancy:[], delinquent:[], renewalRate:[], doorsAdded:[], doorsLost:[], avgRent:[], ... },
+  },
+  drilldowns: {
+    occupancy: { title, cols, rows },
+    delinquent: { title, cols, rows },
+    renewalRate: { title, cols, rows },
+    // ... one per drillable metric
+  },
+  sync: { lastSync, status, duration }
+}
+```
+
+Each KPI uses the buildKpi pattern:
+```js
+function buildKpi(value, prevYear = 0, opts = {}) {
+  return { value: value ?? 0, prevYear: prevYear ?? 0, ...opts };
+}
+```
+
+The aggregator can make LIVE AppFolio API calls for data that's better fresh (like income_statement_12_month for chart trends). Import the appfolio client:
+```js
+import { appfolio } from "./appfolio.js";
+```
+
+For sparklines, build 12-element arrays from monthly data (one value per month for trailing 12 months).
+
+## FIX: db.js async issue
+The getDb() function uses `await import("fs")` but isn't async. Change line 1 to:
+```js
+import fs from "fs";
+```
+And use `fs.mkdirSync` directly instead of the dynamic import.
+
+## Header Branding
+Instead of a logo image, render styled text:
+```jsx
+<div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+  <span style={{ fontSize: 16, fontWeight: 700, color: '#1A1A1A', letterSpacing: '-0.02em' }}>
+    RMC
+  </span>
+  <span style={{ fontSize: 11, color: '#A69D93', fontWeight: 500 }}>
+    Real Management Company
+  </span>
+</div>
+```
+
+## DO NOT:
+- Use any CSS framework (Tailwind, Bootstrap, etc.)
+- Use any build tools (Vite, webpack, etc.) — everything is inline or Babel CDN
+- Reference Buildium, RentEngine, or LeadSimple anywhere
+- Use green (#3d8c1f) as the primary color — use gold (#D4881A)
+- Create a minimal or simplified layout — this must be a FULL, rich dashboard with sparklines, trend charts, drill-downs, and dense data display
+- Skip the sparklines on KPI tiles — they are a core design element
+- Skip the drill-down modals — every tile must be clickable
+
+## AFTER BUILDING:
+1. Install: `npm install`
+2. Start: `npm start` (auto-syncs after 5s)
+3. Open dashboard in browser
+4. Check console for `[sync]` and `[af]` log lines
+5. If AppFolio field names don't match (they vary by account), adjust the field mapping in sync.js

@@ -35,14 +35,20 @@ async function postReport(endpoint, body = {}, opts = {}) {
   await rateWait();
   const url = `${BASE()}/${endpoint}`;
   console.log(`[af] POST ${endpoint}`);
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authHeader(),
-    },
-    body: JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: authHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.error(`[af] fetch threw for ${endpoint}: ${e.message} | cause: ${e.cause?.message || e.cause?.code || "n/a"}`);
+    throw e;
+  }
   if (res.status === 429) {
     console.warn("[af] 429 — waiting 16s and retrying");
     await new Promise(r => setTimeout(r, 16000));
@@ -66,9 +72,13 @@ async function fetchAll(endpoint, body = {}) {
   let nextUrl = first.next_page_url;
 
   while (nextUrl) {
-    // next_page_url calls are NOT rate limited
+    // next_page_url calls are NOT rate limited.
+    // AppFolio returns a relative path here, so resolve it against the host origin.
+    const absUrl = /^https?:\/\//i.test(nextUrl)
+      ? nextUrl
+      : new URL(nextUrl, `https://${DOMAIN()}.appfolio.com`).href;
     console.log(`[af] next_page (${rows.length} rows so far)`);
-    const res = await fetch(nextUrl, {
+    const res = await fetch(absUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -102,7 +112,7 @@ export const appfolio = {
 
   // Occupancy & vacancy
   occupancySummary: (asOfTo) => fetchAll("occupancy_summary.json", { as_of_to: asOfTo }),
-  unitVacancyDetail: (body = {}) => fetchAll("unit_vacancy_detail.json", body),
+  unitVacancyDetail: (body = {}) => fetchAll("unit_vacancy.json", body),
 
   // Rent & leasing
   rentRoll: (asOfTo) => fetchAll("rent_roll.json", { as_of_to: asOfTo }),
@@ -145,6 +155,8 @@ export const appfolio = {
     fetchAll("cash_flow.json", { posted_on_from: fromDate, posted_on_to: toDate, ...body }),
   cashFlow12Month: (fromMonth, toMonth, body = {}) =>
     fetchAll("cash_flow_12_month.json", { posted_on_from: fromMonth, posted_on_to: toMonth, ...body }),
+  twelveMonthCashFlow: (fromMonth, toMonth, body = {}) =>
+    fetchAll("twelve_month_cash_flow.json", { posted_on_from: fromMonth, posted_on_to: toMonth, ...body }),
   generalLedger: (fromDate, toDate, body = {}) =>
     fetchAll("general_ledger.json", { posted_on_from: fromDate, posted_on_to: toDate, ...body }),
   balanceSheet: (asOfDate, body = {}) =>

@@ -159,9 +159,11 @@ export async function syncAll() {
       unit_id: r.unit_id ? String(r.unit_id) : "",
       available_date: r.available_date || r.available_on || "",
       days_vacant: r.days_vacant ? Number(r.days_vacant) : 0,
-      market_rent: r.market_rent ? parseFloat(r.market_rent) : null,
+      market_rent: (r.market_rent || r.computed_market_rent || r.schd_rent)
+        ? parseFloat(r.market_rent || r.computed_market_rent || r.schd_rent)
+        : null,
       advertised_rent: r.advertised_rent ? parseFloat(r.advertised_rent) : null,
-      status: r.status || r.vacancy_status || "",
+      status: r.status || r.vacancy_status || r.unit_status || "",
       synced_at,
     }));
     const cols = ["property_name","property_id","unit","unit_id","available_date",

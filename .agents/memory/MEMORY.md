@@ -1,0 +1,1 @@
+- [AppFolio report names](appfolio-report-names.md) — report endpoints are account-specific; many plausible names 400, probe before trusting. Confirmed working set + key fields.

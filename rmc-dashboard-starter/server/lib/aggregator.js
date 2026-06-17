@@ -124,7 +124,7 @@ function buildLeasing() {
   };
 }
 
-function buildFinancials() {
+async function buildFinancials() {
   const delinquent = round(
     one("SELECT SUM(amount_receivable) s FROM delinquency").s,
     2
@@ -147,10 +147,26 @@ function buildFinancials() {
     2
   );
 
-  // Gross / net income come from income_rows (synced) when present.
-  const income = one(
-    "SELECT SUM(CASE WHEN year_to_date > 0 THEN year_to_date ELSE 0 END) gross, SUM(year_to_date) net FROM income_rows"
-  );
+  // Gross / net income come from a live YTD income statement; degrade gracefully.
+  let grossIncome = 0;
+  let netIncome = 0;
+  try {
+    const year = new Date().getFullYear();
+    const rows = await appfolio.incomeStatement(
+      year + "-" + String(new Date().getMonth() + 1).padStart(2, "0"),
+      { posted_on_from: year + "-01" }
+    );
+    if (Array.isArray(rows)) {
+      const find = (re) =>
+        rows.find((r) => re.test((r.account_name || "").trim()));
+      const totalIncome = num(parseFloat(find(/^total income$/i)?.year_to_date));
+      const totalExpense = num(parseFloat(find(/^total expense$/i)?.year_to_date));
+      grossIncome = round(totalIncome, 2);
+      netIncome = round(totalIncome - totalExpense, 2);
+    }
+  } catch (e) {
+    console.warn("[aggregator] income_statement unavailable:", e.message);
+  }
 
   return {
     delinquent,
@@ -163,8 +179,8 @@ function buildFinancials() {
       ninetyPlus: round(aging.ninety, 2),
     },
     avgRentPerDoor,
-    grossIncome: round(income.gross, 2),
-    netIncome: round(income.net, 2),
+    grossIncome,
+    netIncome,
   };
 }
 
@@ -298,36 +314,30 @@ async function buildCharts() {
     expense: 0,
   }));
 
-  // Try a live 12-month income statement; degrade gracefully on any error.
+  // Live 12-month cash flow gives per-month income/expense totals; degrade gracefully.
   try {
-    const from = months[0] + "-01";
-    const to = months[months.length - 1] + "-01";
-    const rows = await appfolio.incomeStatement12Month(from, to);
+    const rows = await appfolio.twelveMonthCashFlow(months[0], months[months.length - 1]);
     if (Array.isArray(rows) && rows.length) {
-      const totals = {};
-      for (const m of months) totals[m] = { gross: 0, expense: 0 };
-      for (const r of rows) {
-        const isExpense =
-          /expense/i.test(r.account_type || "") ||
-          /expense/i.test(r.account_name || "");
-        for (const m of months) {
-          const key = Object.keys(r).find((k) => k.includes(m));
-          const val = key ? parseFloat(r[key]) : NaN;
-          if (!isNaN(val)) {
-            if (isExpense) totals[m].expense += val;
-            else totals[m].gross += val;
-          }
-        }
+      const pick = (re) => rows.find((r) => re.test((r.account_name || "").trim()));
+      const incomeRow = pick(/^total income$/i);
+      const expenseRow = pick(/^total expense$/i);
+      const toMap = (row) => {
+        const map = {};
+        (row?.months || []).forEach((m) => { map[m.id] = Math.abs(num(parseFloat(m.value))); });
+        return map;
+      };
+      const inc = toMap(incomeRow);
+      const exp = toMap(expenseRow);
+      if (incomeRow || expenseRow) {
+        monthlyRevenue = months.map((m) => {
+          const gross = round(inc[m] || 0, 2);
+          const expense = round(exp[m] || 0, 2);
+          return { month: m, gross, expense, net: round(gross - expense, 2) };
+        });
       }
-      monthlyRevenue = months.map((m) => ({
-        month: m,
-        gross: round(totals[m].gross, 2),
-        expense: round(totals[m].expense, 2),
-        net: round(totals[m].gross - totals[m].expense, 2),
-      }));
     }
   } catch (e) {
-    console.warn("[aggregator] income_statement_12_month unavailable:", e.message);
+    console.warn("[aggregator] twelve_month_cash_flow unavailable:", e.message);
   }
 
   // Occupancy / delinquency trends from monthly_snapshots when present.
@@ -357,10 +367,12 @@ async function buildCharts() {
 export async function buildDashboard() {
   const occupancy = buildOccupancy();
   const leasing = buildLeasing();
-  const financials = buildFinancials();
   const marketing = buildMarketing();
   const maintenance = buildMaintenance();
-  const charts = await buildCharts();
+  const [financials, charts] = await Promise.all([
+    buildFinancials(),
+    buildCharts(),
+  ]);
 
   const lastSync =
     one("SELECT * FROM sync_log ORDER BY id DESC LIMIT 1") || {};
