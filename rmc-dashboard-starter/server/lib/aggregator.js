@@ -220,23 +220,30 @@ function buildMarketing() {
     "SELECT COALESCE(NULLIF(source,''),'Unknown') source, COUNT(*) count FROM guest_cards WHERE received_date >= date('now','-12 months') GROUP BY source ORDER BY count DESC LIMIT 12"
   ).map((r) => ({ source: r.source, count: num(r.count) }));
 
+  // Conversion funnel over a consistent trailing-12-month window so each stage
+  // is a strict subset of the one above it. "Approved" = applications that
+  // passed screening (approved, now converting, or fully converted/leased);
+  // "Converted" = leases signed.
   const funnel = {
     inquiries: num(
       one(
-        "SELECT COUNT(*) c FROM guest_cards WHERE received_date >= date('now','-30 days')"
+        "SELECT COUNT(*) c FROM guest_cards WHERE received_date >= date('now','-12 months')"
       ).c
     ),
-    showings: showingsTotal,
     applications: num(
       one(
-        "SELECT COUNT(*) c FROM applications WHERE received_date >= date('now','-30 days')"
+        "SELECT COUNT(*) c FROM applications WHERE received_date >= date('now','-12 months')"
       ).c
     ),
     approved: num(
-      one("SELECT COUNT(*) c FROM applications WHERE status = 'Approved'").c
+      one(
+        "SELECT COUNT(*) c FROM applications WHERE status IN ('Approved','Converting','Converted') AND received_date >= date('now','-12 months')"
+      ).c
     ),
     converted: num(
-      one("SELECT COUNT(*) c FROM applications WHERE status = 'Converted'").c
+      one(
+        "SELECT COUNT(*) c FROM applications WHERE status = 'Converted' AND received_date >= date('now','-12 months')"
+      ).c
     ),
   };
 

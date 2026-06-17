@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Runtime SQLite database (contains live AppFolio data — do not commit)
+rmc-dashboard-starter/data/
+rmc-dashboard-starter/*.db
+rmc-dashboard-starter/*.db-wal
+rmc-dashboard-starter/*.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Logs / OS noise
+*.log
+.DS_Store

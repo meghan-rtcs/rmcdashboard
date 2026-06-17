@@ -135,10 +135,10 @@ export async function syncAll() {
       property_name: r.property_name || r.property || "",
       property_id: r.property_id ? String(r.property_id) : "",
       unit: r.unit || "", unit_id: r.unit_id ? String(r.unit_id) : "",
-      applicant_name: r.applicant_name || r.name || "",
-      received_date: r.received_date || r.received_on || "",
-      status: r.status || "",
-      decision_date: r.decision_date || "",
+      applicant_name: r.applicant_name || r.applicants || r.name || "",
+      received_date: (r.received || r.received_date || r.received_on || "").slice(0, 10),
+      status: r.status || r.application_status || "",
+      decision_date: r.decision_date || r.decision_made_at || "",
       synced_at,
     }));
     const cols = ["property_name","property_id","unit","unit_id","applicant_name",
@@ -255,7 +255,7 @@ export async function syncAll() {
       prospect_name: r.name || r.prospect_name || "",
       source: r.source || r.guest_card_source || "",
       status: r.status || "",
-      received_date: r.received_date || r.received_on || "",
+      received_date: (r.received || r.received_date || r.received_on || "").slice(0, 10),
       assigned_user: r.assigned_user || "",
       synced_at,
     }));
