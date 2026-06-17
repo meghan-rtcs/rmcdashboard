@@ -1,0 +1,13 @@
+{
+  "name": "rmc-dashboard",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "sync": "node -e \"import('./server/lib/sync.js').then(m => m.syncAll().then(r => console.log(r)))\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "express": "^4.18.2"
+  }
+}
