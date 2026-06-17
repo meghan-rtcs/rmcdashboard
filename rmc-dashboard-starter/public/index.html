@@ -641,10 +641,10 @@
               <div style={{ fontSize: 15, color: C.black, marginBottom: 18, fontWeight: 500 }}>Enter password to continue</div>
               <input type="password" value={pw} autoFocus
                 onChange={(e) => { setPw(e.target.value); setErr(false); }}
-                onKeyDown={(e) => { if (e.key === "Enter") { pw === "RMCRTCS" ? setAuthed(true) : setErr(true); } }}
+                onKeyDown={(e) => { if (e.key === "Enter") { pw === "RTCS" ? setAuthed(true) : setErr(true); } }}
                 placeholder="Password"
                 style={{ width: "100%", padding: "10px 12px", border: "1px solid " + (err ? C.red : C.border), borderRadius: 8, fontSize: 14, marginBottom: 12, outline: "none" }} />
-              <button onClick={() => (pw === "RMCRTCS" ? setAuthed(true) : setErr(true))}
+              <button onClick={() => (pw === "RTCS" ? setAuthed(true) : setErr(true))}
                 style={{ width: "100%", padding: "10px", background: C.black, color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 14 }}>Unlock</button>
               {err ? <p style={{ color: C.red, fontSize: 12.5, marginTop: 10 }}>Incorrect password</p> : null}
             </div>
