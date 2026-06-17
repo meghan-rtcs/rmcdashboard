@@ -22,6 +22,11 @@
     input { font-family: inherit; }
     ::-webkit-scrollbar { height: 8px; width: 8px; }
     ::-webkit-scrollbar-thumb { background: #E8E0D4; border-radius: 4px; }
+    @keyframes livePulse {
+      0%   { box-shadow: 0 0 0 0 rgba(45,140,62,0.45); }
+      70%  { box-shadow: 0 0 0 4px rgba(45,140,62,0); }
+      100% { box-shadow: 0 0 0 0 rgba(45,140,62,0); }
+    }
   </style>
 </head>
 <body>
@@ -95,7 +100,7 @@
     });
 
     // ── KPI tile (compact, optional sparkline, drillable) ─────────────────────
-    function KpiCard({ label, value, unit, sub, tone, drill, spark, sparkColor, big }) {
+    function KpiCard({ label, value, unit, sub, tone, drill, spark, sparkColor, big, live }) {
       const ctx = useDrill();
       const [hover, setHover] = useState(false);
       const accent = tone === "good" ? C.green : tone === "bad" ? C.red : tone === "warn" ? C.amber : tone === "info" ? C.blue : C.gold;
@@ -120,7 +125,16 @@
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
             <span style={{ fontSize: 9.5, color: C.muted, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", lineHeight: 1.3 }}>{label}</span>
-            {clickable && <span style={{ fontSize: 13, color: hover ? accent : "#CFC6B2", lineHeight: 1 }}>›</span>}
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {live && (
+                <span title="Live figure — always current, not affected by the date filter"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 8, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: C.green, background: "rgba(45,140,62,0.09)", border: "1px solid rgba(45,140,62,0.28)", borderRadius: 5, padding: "1.5px 5px 1.5px 4px", whiteSpace: "nowrap" }}>
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: C.green, animation: "livePulse 1.8s infinite" }} />
+                  Live
+                </span>
+              )}
+              {clickable && <span style={{ fontSize: 13, color: hover ? accent : "#CFC6B2", lineHeight: 1 }}>›</span>}
+            </span>
           </div>
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 8 }}>
             <span style={{ fontSize: big ? 34 : 27, fontWeight: 300, color: accent, lineHeight: 1, letterSpacing: "-1px", fontVariantNumeric: "tabular-nums" }}>
@@ -495,10 +509,10 @@
           {/* HERO */}
           <SectionHeader title="Top of Mind" subtitle="Tap any tile or chart for the records behind it" />
           <div style={gridAuto(220)}>
-            <KpiCard big label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} drill="occupancy" spark={occSpark} sparkColor={C.green} />
-            <KpiCard big label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" spark={delSpark} sparkColor={C.red} />
-            <KpiCard big label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} drill="rentRoll" />
-            <KpiCard big label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} sub={fmt.num(w.avgDaysToComplete) + "d avg to close"} drill="openWorkOrders" />
+            <KpiCard big live label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} drill="occupancy" spark={occSpark} sparkColor={C.green} />
+            <KpiCard big live label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" spark={delSpark} sparkColor={C.red} />
+            <KpiCard big live label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} drill="rentRoll" />
+            <KpiCard big live label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} sub={fmt.num(w.avgDaysToComplete) + "d avg to close"} drill="openWorkOrders" />
           </div>
 
           {/* FINANCIALS */}
@@ -519,9 +533,9 @@
             </ChartCard>
           </div>
           <div style={{ ...gridAuto(180), marginTop: 12 }}>
-            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
-            <KpiCard label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
-            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
+            <KpiCard live label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
+            <KpiCard live label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
+            <KpiCard live label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
           </div>
 
           {/* OCCUPANCY */}
@@ -535,11 +549,11 @@
               colors={{ Occupied: C.green, "Vacant — rented": C.amber, "Vacant — not rented": C.red }} />
           </div>
           <div style={{ ...gridAuto(180), marginTop: 12 }}>
-            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} sub={o.properties + " properties"} drill="units" />
-            <KpiCard label="Vacant — Not Rented" value={fmt.num(o.vacantNotRented)} tone="bad" drill="vacantNotRented" />
-            <KpiCard label="Avg Days Vacant" value={fmt.num(o.avgDaysVacant)} unit="days" drill="vacancies" />
-            <KpiCard label="Units on Market" value={fmt.num(m.unitsOnMarket)} drill="vacancies" />
-            <KpiCard label="Owners" value={fmt.num(o.owners)} drill="owners" />
+            <KpiCard live label="Total Units" value={fmt.num(o.totalUnits)} sub={o.properties + " properties"} drill="units" />
+            <KpiCard live label="Vacant — Not Rented" value={fmt.num(o.vacantNotRented)} tone="bad" drill="vacantNotRented" />
+            <KpiCard live label="Avg Days Vacant" value={fmt.num(o.avgDaysVacant)} unit="days" drill="vacancies" />
+            <KpiCard live label="Units on Market" value={fmt.num(m.unitsOnMarket)} drill="vacancies" />
+            <KpiCard live label="Owners" value={fmt.num(o.owners)} drill="owners" />
           </div>
 
           {/* LEASING */}
@@ -557,7 +571,7 @@
             <KpiCard label="Move-ins" value={fmt.num(l.moveins)} sub={rangeLabel} drill="moveins" />
             <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub={rangeLabel} drill="applications" />
             <KpiCard label="Apps / Move-in" value={fmt.num(l.appsPerMovein)} drill="applications" />
-            <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
+            <KpiCard live label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
           </div>
 
           {/* MARKETING & MAINTENANCE */}
@@ -574,8 +588,8 @@
             <KpiCard label="Inquiries" value={fmt.num(m.inquiries)} sub={rangeLabel} drill="inquiries" />
             <KpiCard label="Showings" value={fmt.num(m.showingsTotal)} sub={rangeLabel} drill="showings" />
             <KpiCard label="Show Completion" value={fmt.pct(m.showingCompletionRate)} tone="good" drill="showingsCompleted" />
-            <KpiCard label="Urgent WOs" value={fmt.num(w.byPriority.urgent)} tone={w.byPriority.urgent ? "bad" : "good"} drill="woUrgent" />
-            <KpiCard label="Unit Turns" value={fmt.num(w.byType.unitTurn)} drill="woUnitTurn" />
+            <KpiCard live label="Urgent WOs" value={fmt.num(w.byPriority.urgent)} tone={w.byPriority.urgent ? "bad" : "good"} drill="woUrgent" />
+            <KpiCard live label="Unit Turns" value={fmt.num(w.byType.unitTurn)} drill="woUnitTurn" />
           </div>
         </div>
       );
@@ -613,7 +627,7 @@
           <SectionHeader title="Pipeline Detail" />
           <div style={gridAuto(180)}>
             <KpiCard label="Inquiries" value={fmt.num(m.inquiries)} sub={rangeLabel} drill="inquiries" />
-            <KpiCard label="Active Prospects" value={fmt.num(m.activeProspects)} drill="activeProspects" />
+            <KpiCard live label="Active Prospects" value={fmt.num(m.activeProspects)} drill="activeProspects" />
             <KpiCard label="Showings" value={fmt.num(m.showingsTotal)} sub={rangeLabel} drill="showings" />
             <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" drill="showingsCompleted" />
             <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone={m.noShows ? "warn" : "good"} drill="noShows" />
@@ -662,10 +676,10 @@
         <div>
           <SectionHeader title="CEO View · Financial Performance" />
           <div style={gridAuto(220)}>
-            <KpiCard big label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
-            <KpiCard big label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
-            <KpiCard big label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
-            <KpiCard big label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} drill="occupancy" />
+            <KpiCard big live label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
+            <KpiCard big live label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
+            <KpiCard big live label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
+            <KpiCard big live label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} drill="occupancy" />
           </div>
 
           <SectionHeader title="Income — 12 months" />
@@ -694,10 +708,10 @@
           <div style={gridAuto(180)}>
             <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} drill="renewals" />
             <KpiCard label="Renewals" value={fmt.num(l.renewalsCount)} drill="renewals" />
-            <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
-            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} drill="units" />
-            <KpiCard label="Properties" value={fmt.num(o.properties)} drill="properties" />
-            <KpiCard label="Owners" value={fmt.num(o.owners)} drill="owners" />
+            <KpiCard live label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" drill="fixedLeases" />
+            <KpiCard live label="Total Units" value={fmt.num(o.totalUnits)} drill="units" />
+            <KpiCard live label="Properties" value={fmt.num(o.properties)} drill="properties" />
+            <KpiCard live label="Owners" value={fmt.num(o.owners)} drill="owners" />
           </div>
         </div>
       );
