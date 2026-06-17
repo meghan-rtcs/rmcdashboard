@@ -1,12 +1,13 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getDb } from "./lib/db.js";
+import { getDb, query } from "./lib/db.js";
 import { syncAll } from "./lib/sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
+const HOST = "0.0.0.0";
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
@@ -40,8 +41,7 @@ app.post("/api/sync", async (req, res) => {
 
 // ── API: Sync status ──────────────────────────────────────────────────────
 app.get("/api/sync/status", (req, res) => {
-  const { query: q } = await import("./lib/db.js");
-  const last = q("SELECT * FROM sync_log ORDER BY id DESC LIMIT 1")[0];
+  const last = query("SELECT * FROM sync_log ORDER BY id DESC LIMIT 1")[0];
   res.json(last || { status: "never" });
 });
 

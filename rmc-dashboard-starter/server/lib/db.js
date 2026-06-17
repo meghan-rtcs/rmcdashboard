@@ -1,5 +1,6 @@
 // ── SQLite DB for RMC Dashboard ──────────────────────────────────────────────
 import Database from "better-sqlite3";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -9,7 +10,6 @@ const DB_PATH = path.join(__dirname, "..", "..", "data", "rmc.db");
 let db;
 export function getDb() {
   if (db) return db;
-  const fs = await import("fs");
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
