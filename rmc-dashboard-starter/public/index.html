@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RMC Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #FFFAF2;
+      color: #1A1A1A;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font-family: inherit; cursor: pointer; }
+    input { font-family: inherit; }
+    ::-webkit-scrollbar { height: 8px; width: 8px; }
+    ::-webkit-scrollbar-thumb { background: #E8E0D4; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    const C = {
+      gold: "#F5A623",
+      darkGold: "#D48B1A",
+      black: "#1A1A1A",
+      bg: "#FFFAF2",
+      card: "#FFFFFF",
+      border: "#E8E0D4",
+      muted: "#6B6B6B",
+      green: "#2D8C3E",
+      red: "#C0392B",
+      amber: "#D68910",
+    };
+
+    const fmt = {
+      num: (v) => (v == null ? "—" : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })),
+      pct: (v) => (v == null ? "—" : Number(v).toFixed(1) + "%"),
+      money: (v) =>
+        v == null
+          ? "—"
+          : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }),
+      money2: (v) =>
+        v == null
+          ? "—"
+          : "$" + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      month: (m) => {
+        if (!m) return "";
+        const [y, mo] = m.split("-");
+        const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        return names[Number(mo) - 1] + " " + y.slice(2);
+      },
+    };
+
+    function Card({ children, style }) {
+      return (
+        <div
+          style={{
+            background: C.card,
+            border: "1px solid " + C.border,
+            borderRadius: 12,
+            padding: 18,
+            boxShadow: "0 1px 2px rgba(26,26,26,0.04)",
+            ...style,
+          }}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    function KpiCard({ label, value, unit, sub, tone }) {
+      const accent = tone === "good" ? C.green : tone === "bad" ? C.red : tone === "warn" ? C.amber : C.gold;
+      return (
+        <div
+          style={{
+            background: C.card,
+            border: "1px solid " + C.border,
+            borderLeft: "4px solid " + accent,
+            borderRadius: 10,
+            padding: "16px 18px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            minHeight: 96,
+          }}
+        >
+          <span style={{ fontSize: 12, color: C.muted, fontWeight: 600, letterSpacing: 0.3, textTransform: "uppercase" }}>
+            {label}
+          </span>
+          <span style={{ fontSize: 28, fontWeight: 700, color: C.black, lineHeight: 1.1 }}>
+            {unit === "$" ? "" : ""}
+            {value}
+            {unit && unit !== "$" ? <span style={{ fontSize: 16, color: C.muted, marginLeft: 3 }}>{unit}</span> : null}
+          </span>
+          {sub ? <span style={{ fontSize: 12.5, color: C.muted }}>{sub}</span> : null}
+        </div>
+      );
+    }
+
+    function SectionTitle({ children, right }) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "26px 0 12px" }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: C.black, display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: C.gold, display: "inline-block" }} />
+            {children}
+          </h2>
+          {right}
+        </div>
+      );
+    }
+
+    const grid = (min = 200) => ({
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(" + min + "px, 1fr))",
+      gap: 14,
+    });
+
+    // ── Simple SVG charts (no deps) ──────────────────────────────────────────
+    function BarChart({ data, keys, colors, height = 200 }) {
+      if (!data || !data.length) return <Empty />;
+      const max = Math.max(1, ...data.flatMap((d) => keys.map((k) => Math.abs(d[k] || 0))));
+      const bw = 100 / data.length;
+      return (
+        <svg viewBox={"0 0 " + (data.length * 40) + " " + height} width="100%" height={height} preserveAspectRatio="none">
+          {data.map((d, i) => {
+            const gap = 4;
+            const groupW = 40;
+            const innerW = groupW - gap * 2;
+            const kw = innerW / keys.length;
+            return (
+              <g key={i} transform={"translate(" + i * groupW + ",0)"}>
+                {keys.map((k, ki) => {
+                  const h = (Math.abs(d[k] || 0) / max) * (height - 24);
+                  return (
+                    <rect
+                      key={k}
+                      x={gap + ki * kw}
+                      y={height - 16 - h}
+                      width={kw - 1}
+                      height={Math.max(h, 0)}
+                      fill={colors[ki]}
+                      rx="1"
+                    />
+                  );
+                })}
+                <text x={groupW / 2} y={height - 4} fontSize="6" textAnchor="middle" fill={C.muted}>
+                  {fmt.month(d.month)}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      );
+    }
+
+    function LineChart({ data, valueKey, color, height = 200, suffix = "" }) {
+      if (!data || !data.length) return <Empty />;
+      const vals = data.map((d) => d[valueKey] || 0);
+      const max = Math.max(1, ...vals);
+      const min = Math.min(0, ...vals);
+      const w = data.length * 40;
+      const range = max - min || 1;
+      const pts = data.map((d, i) => {
+        const x = i * 40 + 20;
+        const y = height - 16 - ((d[valueKey] - min) / range) * (height - 28);
+        return [x, y];
+      });
+      const path = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0] + "," + p[1]).join(" ");
+      return (
+        <svg viewBox={"0 0 " + w + " " + height} width="100%" height={height} preserveAspectRatio="none">
+          <path d={path} fill="none" stroke={color} strokeWidth="2" />
+          {pts.map((p, i) => (
+            <g key={i}>
+              <circle cx={p[0]} cy={p[1]} r="2.5" fill={color} />
+              <text x={p[0]} y={height - 4} fontSize="6" textAnchor="middle" fill={C.muted}>
+                {fmt.month(data[i].month)}
+              </text>
+            </g>
+          ))}
+        </svg>
+      );
+    }
+
+    function Empty({ label }) {
+      return (
+        <div style={{ padding: 28, textAlign: "center", color: C.muted, fontSize: 13 }}>
+          {label || "No data yet"}
+        </div>
+      );
+    }
+
+    function Funnel({ funnel }) {
+      const steps = [
+        { label: "Inquiries", value: funnel.inquiries },
+        { label: "Showings", value: funnel.showings },
+        { label: "Applications", value: funnel.applications },
+        { label: "Approved", value: funnel.approved },
+        { label: "Converted", value: funnel.converted },
+      ];
+      const max = Math.max(1, ...steps.map((s) => s.value));
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {steps.map((s) => (
+            <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 100, fontSize: 13, color: C.muted }}>{s.label}</span>
+              <div style={{ flex: 1, background: C.bg, borderRadius: 6, overflow: "hidden", height: 26 }}>
+                <div
+                  style={{
+                    width: Math.max((s.value / max) * 100, 2) + "%",
+                    background: "linear-gradient(90deg," + C.gold + "," + C.darkGold + ")",
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    paddingLeft: 8,
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {s.value}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function BreakdownBar({ rows, color }) {
+      if (!rows || !rows.length) return <Empty />;
+      const max = Math.max(1, ...rows.map((r) => r.count));
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {rows.map((r) => (
+            <div key={r.source} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 120, fontSize: 12.5, color: C.black, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.source}
+              </span>
+              <div style={{ flex: 1, background: C.bg, borderRadius: 5, height: 18 }}>
+                <div style={{ width: Math.max((r.count / max) * 100, 2) + "%", background: color || C.gold, height: "100%", borderRadius: 5 }} />
+              </div>
+              <span style={{ width: 36, textAlign: "right", fontSize: 12.5, fontWeight: 600 }}>{r.count}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ── Tabs ──────────────────────────────────────────────────────────────────
+    function DashboardTab({ d }) {
+      const o = d.occupancy, l = d.leasing, f = d.financials, m = d.marketing, w = d.maintenance;
+      return (
+        <div>
+          <div style={grid(220)}>
+            <KpiCard label="Occupancy Rate" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} />
+            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} sub={o.properties + " properties"} />
+            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} sub={fmt.money(f.delinquent) + " outstanding"} />
+            <KpiCard label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} />
+          </div>
+
+          <SectionTitle>Occupancy</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Occupied" value={fmt.num(o.occupied)} tone="good" />
+            <KpiCard label="Vacant" value={fmt.num(o.vacant)} tone={o.vacant ? "warn" : "good"} />
+            <KpiCard label="Vacant — Not Rented" value={fmt.num(o.vacantNotRented)} tone="bad" />
+            <KpiCard label="Vacant — Rented" value={fmt.num(o.vacantRented)} />
+            <KpiCard label="Avg Days Vacant" value={fmt.num(o.avgDaysVacant)} unit="days" />
+            <KpiCard label="Units on Market" value={fmt.num(m.unitsOnMarket)} />
+          </div>
+
+          <SectionTitle>Leasing</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} sub={l.renewalsCount + " renewed"} />
+            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} />
+            <KpiCard label="Fixed Leases" value={fmt.num(l.fixedLeases)} />
+            <KpiCard label="Apps Submitted" value={fmt.num(l.appsSubmitted)} sub="trailing 12 mo" />
+            <KpiCard label="Move-ins" value={fmt.num(l.moveins)} sub="trailing 12 mo" />
+            <KpiCard label="Apps / Move-in" value={fmt.num(l.appsPerMovein)} />
+          </div>
+
+          <SectionTitle>Marketing & Funnel</SectionTitle>
+          <div style={{ ...grid(260), alignItems: "stretch" }}>
+            <div style={grid(150)}>
+              <KpiCard label="Inquiries (30d)" value={fmt.num(m.inquiries)} />
+              <KpiCard label="Active Prospects" value={fmt.num(m.activeProspects)} />
+              <KpiCard label="Showings (30d)" value={fmt.num(m.showingsTotal)} />
+              <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" />
+              <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone={m.noShows ? "warn" : "good"} />
+              <KpiCard label="Show Completion" value={fmt.pct(m.showingCompletionRate)} />
+            </div>
+            <Card>
+              <h3 style={{ fontSize: 13, color: C.muted, marginBottom: 12, fontWeight: 600 }}>Leasing Funnel</h3>
+              <Funnel funnel={m.funnel} />
+            </Card>
+          </div>
+
+          <SectionTitle>Financials</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} />
+            <KpiCard label="Current" value={fmt.money(f.aging.current)} />
+            <KpiCard label="30+ Days" value={fmt.money(f.aging.thirtyPlus)} tone="warn" />
+            <KpiCard label="60+ Days" value={fmt.money(f.aging.sixtyPlus)} tone="warn" />
+            <KpiCard label="90+ Days" value={fmt.money(f.aging.ninetyPlus)} tone="bad" />
+            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" />
+          </div>
+
+          <SectionTitle>Maintenance</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} />
+            <KpiCard label="Avg Days to Complete" value={fmt.num(w.avgDaysToComplete)} unit="days" />
+            <KpiCard label="Urgent" value={fmt.num(w.byPriority.urgent)} tone="bad" />
+            <KpiCard label="Normal" value={fmt.num(w.byPriority.normal)} />
+            <KpiCard label="Low" value={fmt.num(w.byPriority.low)} />
+            <KpiCard label="Unit Turns" value={fmt.num(w.byType.unitTurn)} />
+          </div>
+
+          <SectionTitle>Trends</SectionTitle>
+          <div style={grid(320)}>
+            <Card>
+              <h3 style={{ fontSize: 13, color: C.muted, marginBottom: 10, fontWeight: 600 }}>12-Month Revenue vs Expense</h3>
+              <BarChart data={d.charts.monthlyRevenue} keys={["gross", "expense"]} colors={[C.gold, C.red]} />
+              <Legend items={[{ c: C.gold, l: "Gross" }, { c: C.red, l: "Expense" }]} />
+            </Card>
+            <Card>
+              <h3 style={{ fontSize: 13, color: C.muted, marginBottom: 10, fontWeight: 600 }}>Occupancy Trend</h3>
+              <LineChart data={d.charts.occupancyTrend} valueKey="rate" color={C.green} suffix="%" />
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
+    function Legend({ items }) {
+      return (
+        <div style={{ display: "flex", gap: 16, marginTop: 8, justifyContent: "center" }}>
+          {items.map((it) => (
+            <span key={it.l} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: C.muted }}>
+              <span style={{ width: 10, height: 10, background: it.c, borderRadius: 2 }} /> {it.l}
+            </span>
+          ))}
+        </div>
+      );
+    }
+
+    function LeasingTab({ d }) {
+      const m = d.marketing;
+      return (
+        <div>
+          <SectionTitle>Funnel Snapshot (30 days)</SectionTitle>
+          <Card><Funnel funnel={m.funnel} /></Card>
+
+          <SectionTitle>Inquiry Sources (12 mo)</SectionTitle>
+          <Card><BreakdownBar rows={m.inquiriesBySource} /></Card>
+
+          <SectionTitle>Showings</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Total (30d)" value={fmt.num(m.showingsTotal)} />
+            <KpiCard label="Completed" value={fmt.num(m.showingsCompleted)} tone="good" />
+            <KpiCard label="No-Shows" value={fmt.num(m.noShows)} tone="warn" />
+            <KpiCard label="Completion Rate" value={fmt.pct(m.showingCompletionRate)} />
+          </div>
+
+          <SectionTitle>Application Pipeline</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Inquiries" value={fmt.num(m.funnel.inquiries)} />
+            <KpiCard label="Applications" value={fmt.num(m.funnel.applications)} />
+            <KpiCard label="Approved" value={fmt.num(m.funnel.approved)} tone="good" />
+            <KpiCard label="Converted" value={fmt.num(m.funnel.converted)} tone="good" />
+          </div>
+        </div>
+      );
+    }
+
+    function CeoTab({ d }) {
+      const [authed, setAuthed] = useState(false);
+      const [pw, setPw] = useState("");
+      const [err, setErr] = useState(false);
+      const f = d.financials, o = d.occupancy, l = d.leasing;
+
+      if (!authed) {
+        return (
+          <div style={{ maxWidth: 360, margin: "60px auto", textAlign: "center" }}>
+            <Card>
+              <h2 style={{ fontSize: 18, marginBottom: 6 }}>CEO View</h2>
+              <p style={{ color: C.muted, fontSize: 13, marginBottom: 16 }}>Enter password to continue.</p>
+              <input
+                type="password"
+                value={pw}
+                autoFocus
+                onChange={(e) => { setPw(e.target.value); setErr(false); }}
+                onKeyDown={(e) => { if (e.key === "Enter") { pw === "RMCRTCS" ? setAuthed(true) : setErr(true); } }}
+                placeholder="Password"
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid " + (err ? C.red : C.border), borderRadius: 8, fontSize: 14, marginBottom: 12 }}
+              />
+              <button
+                onClick={() => (pw === "RMCRTCS" ? setAuthed(true) : setErr(true))}
+                style={{ width: "100%", padding: "10px", background: C.gold, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14 }}
+              >
+                Unlock
+              </button>
+              {err ? <p style={{ color: C.red, fontSize: 12.5, marginTop: 10 }}>Incorrect password</p> : null}
+            </Card>
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          <SectionTitle>Financial Deep Dive</SectionTitle>
+          <div style={grid(200)}>
+            <KpiCard label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" />
+            <KpiCard label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} />
+            <KpiCard label="Delinquent Total" value={fmt.money(f.delinquent)} tone="bad" />
+            <KpiCard label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} />
+          </div>
+
+          <SectionTitle>Delinquency Aging</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Current" value={fmt.money2(f.aging.current)} />
+            <KpiCard label="30+ Days" value={fmt.money2(f.aging.thirtyPlus)} tone="warn" />
+            <KpiCard label="60+ Days" value={fmt.money2(f.aging.sixtyPlus)} tone="warn" />
+            <KpiCard label="90+ Days" value={fmt.money2(f.aging.ninetyPlus)} tone="bad" />
+          </div>
+
+          <SectionTitle>Renewal Performance</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} />
+            <KpiCard label="Renewals" value={fmt.num(l.renewalsCount)} />
+            <KpiCard label="Month-to-Month" value={fmt.num(l.mtmLeases)} />
+            <KpiCard label="Avg Tenancy" value={fmt.num(l.avgTenancyMonths)} unit="mo" />
+          </div>
+
+          <SectionTitle>Portfolio</SectionTitle>
+          <div style={grid(180)}>
+            <KpiCard label="Total Units" value={fmt.num(o.totalUnits)} />
+            <KpiCard label="Properties" value={fmt.num(o.properties)} />
+            <KpiCard label="Owners" value={fmt.num(o.owners)} />
+            <KpiCard label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} />
+          </div>
+
+          <SectionTitle>Revenue Trend</SectionTitle>
+          <Card>
+            <BarChart data={d.charts.monthlyRevenue} keys={["gross", "net", "expense"]} colors={[C.gold, C.green, C.red]} />
+            <Legend items={[{ c: C.gold, l: "Gross" }, { c: C.green, l: "Net" }, { c: C.red, l: "Expense" }]} />
+          </Card>
+        </div>
+      );
+    }
+
+    function App() {
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [tab, setTab] = useState("dashboard");
+      const [syncing, setSyncing] = useState(false);
+
+      const load = () => {
+        setLoading(true);
+        fetch("/api/dashboard")
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then((j) => { setData(j); setError(null); })
+          .catch((e) => setError(e.message))
+          .finally(() => setLoading(false));
+      };
+
+      useEffect(load, []);
+
+      const sync = () => {
+        setSyncing(true);
+        fetch("/api/sync", { method: "POST" })
+          .then((r) => r.json())
+          .then(() => load())
+          .catch((e) => setError(e.message))
+          .finally(() => setSyncing(false));
+      };
+
+      const syncedAt = data?.dashboard?.meta?.syncedAt;
+      const tabs = [
+        { id: "dashboard", label: "Dashboard" },
+        { id: "leasing", label: "Leasing & Marketing" },
+        { id: "ceo", label: "CEO View" },
+      ];
+
+      return (
+        <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+          <header style={{ background: C.black, color: "#fff", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <h1 style={{ fontSize: 20, fontWeight: 800, letterSpacing: 0.2 }}>Real Management Company</h1>
+              <p style={{ fontSize: 12.5, color: C.gold, marginTop: 2, fontWeight: 600 }}>See what's possible.℠</p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <span style={{ fontSize: 12, color: "#bdbdbd" }}>
+                {syncedAt ? "Last sync: " + new Date(syncedAt).toLocaleString() : "Not synced yet"}
+              </span>
+              <button
+                onClick={sync}
+                disabled={syncing}
+                style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 700, fontSize: 13, opacity: syncing ? 0.6 : 1 }}
+              >
+                {syncing ? "Syncing…" : "Sync Now"}
+              </button>
+            </div>
+          </header>
+
+          <nav style={{ display: "flex", gap: 4, padding: "0 24px", background: C.card, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, zIndex: 10 }}>
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: "14px 16px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: tab === t.id ? C.black : C.muted,
+                  borderBottom: "3px solid " + (tab === t.id ? C.gold : "transparent"),
+                  marginBottom: -1,
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+
+          <main style={{ flex: 1, padding: "8px 24px 48px", maxWidth: 1280, width: "100%", margin: "0 auto" }}>
+            {loading ? (
+              <div style={{ padding: 80, textAlign: "center", color: C.muted }}>Loading dashboard…</div>
+            ) : error ? (
+              <Card style={{ marginTop: 24, borderLeft: "4px solid " + C.red }}>
+                <h3 style={{ color: C.red, marginBottom: 6 }}>Could not load dashboard</h3>
+                <p style={{ color: C.muted, fontSize: 13 }}>{error}</p>
+                <p style={{ color: C.muted, fontSize: 13, marginTop: 8 }}>
+                  If AppFolio credentials are not yet configured, add them and click <b>Sync Now</b>.
+                </p>
+                <button onClick={load} style={{ marginTop: 12, background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 700 }}>Retry</button>
+              </Card>
+            ) : data ? (
+              <>
+                {tab === "dashboard" && <DashboardTab d={data.dashboard} />}
+                {tab === "leasing" && <LeasingTab d={data.dashboard} />}
+                {tab === "ceo" && <CeoTab d={data.dashboard} />}
+                {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
+                  <Card style={{ marginTop: 20, borderLeft: "4px solid " + C.amber }}>
+                    <p style={{ fontSize: 13, color: C.muted }}>
+                      No data yet. Make sure AppFolio credentials are set, then click <b>Sync Now</b> to pull live data.
+                    </p>
+                  </Card>
+                ) : null}
+              </>
+            ) : null}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
