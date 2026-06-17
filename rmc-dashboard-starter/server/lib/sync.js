@@ -79,22 +79,37 @@ export async function syncAll() {
     console.log(`[sync] Delinquency: ${mapped.length} rows`);
   } catch (e) { errors.push(`delinquency: ${e.message}`); console.error("[sync]", e.message); }
 
-  // ── 3. Renewals (trailing 12 months) ────────────────────────────────────
+  // ── 3. Renewals (full history, deduplicated) ─────────────────────────────
+  // renewal_summary needs statuses:["all"] to include non-renewed outcomes, but
+  // AppFolio then emits the SAME renewal event twice — once "Canceled by User"
+  // (a superseded draft) and once "Renewed". Dedupe each event by
+  // occupancy + lease period, keeping the "Renewed" row when present so the
+  // renewal-rate denominator counts each opportunity exactly once.
   try {
-    const rows = await appfolio.renewalSummary(yearAgoMonth, currentMonth, { statuses: ["all"] });
+    const futureIso = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate())
+      .toISOString().slice(0, 10);
+    const rows = await appfolio.renewalSummary("2010-01-01", futureIso, { statuses: ["all"] });
     clearTable("renewals");
-    const mapped = rows.map(r => ({
+    const byEvent = new Map();
+    for (const r of rows) {
+      const key = `${r.occupancy_id ?? r.lease_uuid ?? ""}|${r.lease_start || ""}|${r.lease_end || ""}`;
+      const existing = byEvent.get(key);
+      if (!existing || (r.status === "Renewed" && existing.status !== "Renewed")) {
+        byEvent.set(key, r);
+      }
+    }
+    const mapped = [...byEvent.values()].map(r => ({
       property_name: r.property_name || r.property || "",
       property_id: r.property_id ? String(r.property_id) : "",
-      unit: r.unit || "", unit_id: r.unit_id ? String(r.unit_id) : "",
-      tenant_name: r.tenant || r.tenant_name || "",
-      lease_start: r.lease_start || r.lease_from || "",
-      lease_end: r.lease_end || r.lease_to || "",
+      unit: r.unit_name || r.unit || "", unit_id: r.unit_id ? String(r.unit_id) : "",
+      tenant_name: r.tenant_name || r.tenant || "",
+      lease_start: r.lease_start || "",
+      lease_end: r.lease_end || "",
       renewal_status: r.status || r.renewal_status || "",
-      new_lease_start: r.new_lease_start || r.renewal_start || "",
-      new_lease_end: r.new_lease_end || r.renewal_end || "",
+      new_lease_start: r.lease_start || "",
+      new_lease_end: r.lease_end || "",
       previous_rent: r.previous_rent ? parseFloat(r.previous_rent) : null,
-      new_rent: r.new_rent ? parseFloat(r.new_rent) : null,
+      new_rent: r.rent ? parseFloat(r.rent) : (r.new_rent ? parseFloat(r.new_rent) : null),
       synced_at,
     }));
     const cols = ["property_name","property_id","unit","unit_id","tenant_name",
@@ -102,7 +117,7 @@ export async function syncAll() {
       "previous_rent","new_rent","synced_at"];
     if (mapped.length) upsertMany("renewals", mapped, cols);
     totalRecords += mapped.length;
-    console.log(`[sync] Renewals: ${mapped.length} rows`);
+    console.log(`[sync] Renewals: ${mapped.length} rows (${rows.length} raw, deduped)`);
   } catch (e) { errors.push(`renewals: ${e.message}`); console.error("[sync]", e.message); }
 
   // ── 4. Showings (trailing 12 months) ────────────────────────────────────
