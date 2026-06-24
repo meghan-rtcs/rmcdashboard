@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { getDb, query } from "./lib/db.js";
 import { syncAll } from "./lib/sync.js";
@@ -9,6 +10,38 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
+
+// ── Password protection (HTTP Basic Auth) ─────────────────────────────────
+// Gates the entire dashboard — static page, API, everything — behind a single
+// password supplied via the DASHBOARD_PASSWORD env var. Any username is
+// accepted; only the password is checked (with a constant-time comparison).
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "";
+
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+app.use((req, res, next) => {
+  // Fail closed: if no password is configured, the dashboard stays locked
+  // rather than silently serving unprotected data.
+  if (!DASHBOARD_PASSWORD) {
+    return res
+      .status(500)
+      .send("DASHBOARD_PASSWORD is not configured on the server.");
+  }
+  const header = req.headers.authorization || "";
+  const [scheme, encoded] = header.split(" ");
+  if (scheme === "Basic" && encoded) {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const password = decoded.slice(decoded.indexOf(":") + 1);
+    if (safeEqual(password, DASHBOARD_PASSWORD)) return next();
+  }
+  res.set("WWW-Authenticate", 'Basic realm="RMC Dashboard", charset="UTF-8"');
+  return res.status(401).send("Authentication required.");
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
