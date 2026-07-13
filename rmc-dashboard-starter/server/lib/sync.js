@@ -249,11 +249,13 @@ export async function syncAll() {
       property_name: r.property_name || r.name || "",
       address: r.address || r.street || "",
       city: r.city || "", state: r.state || "", zip: r.zip || "",
-      unit_count: r.unit_count ? Number(r.unit_count) : 0,
+      unit_count: r.unit_count ? Number(r.unit_count) : (r.units ? Number(r.units) : 0),
       property_type: r.property_type || r.type || "",
+      insurance_expiration: r.insurance_expiration || "",
+      owners: r.owners || "",
       synced_at,
     }));
-    const cols = ["id","property_name","address","city","state","zip","unit_count","property_type","synced_at"];
+    const cols = ["id","property_name","address","city","state","zip","unit_count","property_type","insurance_expiration","owners","synced_at"];
     if (mapped.length) upsertMany("properties", mapped, cols);
     totalRecords += mapped.length;
     console.log(`[sync] Properties: ${mapped.length}`);
@@ -287,18 +289,70 @@ export async function syncAll() {
     clearTable("vendors");
     const mapped = rows.map(r => ({
       id: r.vendor_id ? String(r.vendor_id) : r.name || `v-${Math.random()}`,
-      vendor_name: r.name || r.vendor_name || "",
+      vendor_name: r.company_name || r.name || r.vendor_name || "",
       vendor_type: r.vendor_type || r.type || "",
-      workers_comp_expires: r.workers_comp_expiration || "",
-      liability_expires: r.liability_insurance_expiration || r.liability_expiration || "",
-      status: r.status || "active",
+      workers_comp_expires: r.workers_comp_expires || r.workers_comp_expiration || "",
+      liability_expires: r.liability_ins_expires || r.liability_insurance_expiration || "",
+      auto_ins_expires: r.auto_ins_expires || "",
+      epa_cert_expires: r.epa_cert_expires || "",
+      state_lic_expires: r.state_lic_expires || "",
+      status: r.do_not_use_for_work_order === "Yes" ? "do_not_use" : (r.status || "active"),
       synced_at,
     }));
-    const cols = ["id","vendor_name","vendor_type","workers_comp_expires","liability_expires","status","synced_at"];
+    const cols = ["id","vendor_name","vendor_type","workers_comp_expires","liability_expires",
+      "auto_ins_expires","epa_cert_expires","state_lic_expires","status","synced_at"];
     if (mapped.length) upsertMany("vendors", mapped, cols);
     totalRecords += mapped.length;
     console.log(`[sync] Vendors: ${mapped.length}`);
   } catch (e) { errors.push(`vendors: ${e.message}`); console.error("[sync]", e.message); }
+
+  // ── 12. Maintenance labor entries (trailing 12 months) ──────────────────
+  try {
+    const rows = await appfolio.workOrderLaborSummary(yearAgoIso, todayIso);
+    clearTable("labor_entries");
+    const mapped = rows.map((r, i) => ({
+      id: r.labor_detail_id ? String(r.labor_detail_id) : `le-${i}`,
+      work_date: (r.date || "").slice(0, 10),
+      tech: r.maintenance_tech || "",
+      property_name: r.property_name || "",
+      unit: r.unit_name || r.unit || "",
+      worked_hours: r.worked_hours != null && r.worked_hours !== "" ? parseFloat(r.worked_hours)
+        : (r.hours != null && r.hours !== "" ? parseFloat(r.hours) : 0),
+      work_order_number: r.work_order_number ? String(r.work_order_number) : "",
+      work_order_status: r.work_order_status || "",
+      description: r.description || "",
+      work_order_id: r.work_order_id ? String(r.work_order_id) : "",
+      synced_at,
+    }));
+    const cols = ["id","work_date","tech","property_name","unit","worked_hours",
+      "work_order_number","work_order_status","description","work_order_id","synced_at"];
+    if (mapped.length) upsertMany("labor_entries", mapped, cols);
+    totalRecords += mapped.length;
+    console.log(`[sync] Labor entries: ${mapped.length}`);
+  } catch (e) { errors.push(`labor_entries: ${e.message}`); console.error("[sync]", e.message); }
+
+  // ── 13. Tenant insurance (from tenant_directory) ────────────────────────
+  try {
+    const rows = await appfolio.tenantDirectory();
+    clearTable("tenant_insurance");
+    const mapped = rows.map(r => ({
+      tenant_name: r.tenant || [r.first_name, r.last_name].filter(Boolean).join(" ") || r.company_name || "",
+      property_name: r.property_name || r.property || "",
+      unit: r.unit || "",
+      tenant_type: r.tenant_type || "",
+      commercial_lease_type: r.commercial_lease_type || "",
+      status: r.status || "",
+      insurance_company: r.insurance_company_name || "",
+      policy_number: r.insurance_policy_number || "",
+      insurance_expiration: r.insurance_expiration || "",
+      synced_at,
+    }));
+    const cols = ["tenant_name","property_name","unit","tenant_type","commercial_lease_type",
+      "status","insurance_company","policy_number","insurance_expiration","synced_at"];
+    if (mapped.length) upsertMany("tenant_insurance", mapped, cols);
+    totalRecords += mapped.length;
+    console.log(`[sync] Tenant insurance: ${mapped.length} tenants`);
+  } catch (e) { errors.push(`tenant_insurance: ${e.message}`); console.error("[sync]", e.message); }
 
   // ── Sync log ────────────────────────────────────────────────────────────
   const duration = Date.now() - start;

@@ -147,6 +147,52 @@ app.get("/api/drilldown/:key", async (req, res) => {
   }
 });
 
+// ── API: Labor adjustments (PTO + off-AppFolio billable hours per tech) ────
+app.get("/api/labor-adjustments", async (req, res) => {
+  try {
+    const { computeBillableHours } = await import("./lib/aggregator.js");
+    const period = String(req.query.period || "");
+    res.json(computeBillableHours(period));
+  } catch (err) {
+    console.error("[api] Labor adjustments error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/labor-adjustments", async (req, res) => {
+  try {
+    const { period, tech, pto_hours, extra_hours } = req.body || {};
+    if (!/^\d{4}-\d{2}$/.test(String(period || ""))) {
+      return res.status(400).json({ error: "period must be YYYY-MM" });
+    }
+    if (!tech || typeof tech !== "string" || !tech.trim()) {
+      return res.status(400).json({ error: "tech is required" });
+    }
+    const pto = Number(pto_hours);
+    const extra = Number(extra_hours);
+    if (!Number.isFinite(pto) || pto < 0 || pto > 744 ||
+        !Number.isFinite(extra) || extra < 0 || extra > 744) {
+      return res.status(400).json({ error: "hours must be between 0 and 744" });
+    }
+    const { run } = await import("./lib/db.js");
+    run(
+      `INSERT INTO labor_adjustments (period, tech, pto_hours, extra_hours, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(period, tech) DO UPDATE SET
+         pto_hours = excluded.pto_hours,
+         extra_hours = excluded.extra_hours,
+         updated_at = excluded.updated_at`,
+      [period, tech.trim(), pto, extra, new Date().toISOString()]
+    );
+    clearDashboardCache();
+    const { computeBillableHours } = await import("./lib/aggregator.js");
+    res.json(computeBillableHours(period));
+  } catch (err) {
+    console.error("[api] Labor adjustments save error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Single-flight sync guard (shared by manual + scheduled triggers) ───────
 let syncPromise = null;
 function runSync() {

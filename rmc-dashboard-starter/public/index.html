@@ -639,6 +639,164 @@
       );
     }
 
+    // ── Operations tab ──────────────────────────────────────────────────────
+    function TechHoursSection({ initial }) {
+      const [bh, setBh] = useState(initial);
+      const [edits, setEdits] = useState({});
+      const [saving, setSaving] = useState(false);
+      const [savedAt, setSavedAt] = useState(null);
+      const [err, setErr] = useState(null);
+      useEffect(() => { setBh(initial); setEdits({}); }, [initial]);
+
+      const monthLabel = new Date(bh.period + "-01T12:00:00").toLocaleString(undefined, { month: "long", year: "numeric" });
+      const val = (tech, field, fallback) => {
+        const e = edits[tech];
+        return e && e[field] !== undefined ? e[field] : String(fallback ?? 0);
+      };
+      const setVal = (tech, field, v) => setEdits((p) => ({ ...p, [tech]: { ...(p[tech] || {}), [field]: v } }));
+      const dirty = Object.keys(edits).length > 0;
+
+      const save = () => {
+        setSaving(true); setErr(null);
+        const jobs = Object.entries(edits).map(([tech, e]) => {
+          const row = bh.techs.find((t) => t.tech === tech) || {};
+          return fetch("/api/labor-adjustments", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              period: bh.period,
+              tech,
+              pto_hours: e.pto !== undefined ? parseFloat(e.pto) || 0 : row.pto || 0,
+              extra_hours: e.extra !== undefined ? parseFloat(e.extra) || 0 : row.extra || 0,
+            }),
+          }).then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+        });
+        Promise.all(jobs)
+          .then(() => fetch("/api/labor-adjustments?period=" + encodeURIComponent(bh.period)))
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then((fresh) => { setBh(fresh); setEdits({}); setSavedAt(Date.now()); })
+          .catch((e) => setErr(e.message))
+          .finally(() => setSaving(false));
+      };
+
+      const inputStyle = { width: 62, padding: "5px 7px", fontSize: 12.5, border: "1px solid " + C.border, borderRadius: 6, background: "#fff", color: C.black, fontVariantNumeric: "tabular-nums", textAlign: "right" };
+      const th = { padding: "8px 12px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.muted, textAlign: "right", borderBottom: "1px solid " + C.border, whiteSpace: "nowrap" };
+      const td = { padding: "8px 12px", fontSize: 12.5, color: C.black, textAlign: "right", borderBottom: "1px solid " + C.border, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
+
+      return (
+        <div>
+          <SectionHeader title={"Maintenance Billable Hours · " + monthLabel}
+            subtitle={"Denominator: " + bh.workdays + " workdays so far × 8h = " + bh.baseHours + "h per tech, minus PTO. Enter PTO and off-AppFolio billable hours, then save."} />
+          <div style={gridAuto(200)}>
+            <KpiCard big live label="Billable Hours (MTD)" value={fmt.num(bh.totalBillable)} unit="h"
+              sub={fmt.num(bh.totalLogged) + "h on work orders + " + fmt.num(bh.totalExtra) + "h projects"} drill="laborEntries" />
+            <KpiCard big live label="Available Hours" value={fmt.num(bh.totalAvailable)} unit="h"
+              sub={fmt.num(bh.totalPto) + "h PTO deducted"} />
+            <KpiCard big live label="Utilization" value={fmt.pct(bh.utilization)}
+              tone={bh.utilization >= 70 ? "good" : bh.utilization >= 50 ? "warn" : "bad"}
+              sub="Billable ÷ available" />
+            <KpiCard big live label="Techs Logging Time" value={fmt.num(bh.techs.length)} drill="laborEntries" />
+          </div>
+
+          <div style={{ marginTop: 12, background: C.card, border: "1px solid " + C.border, borderRadius: 10, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: "left" }}>Tech</th>
+                  <th style={th}>WO Hours</th>
+                  <th style={th}>PTO / Sick (h)</th>
+                  <th style={th}>Other Billable (h)</th>
+                  <th style={th}>Billable</th>
+                  <th style={th}>Available</th>
+                  <th style={th}>Utilization</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bh.techs.length === 0 ? (
+                  <tr><td colSpan={7} style={{ ...td, textAlign: "center", color: C.muted, padding: 24 }}>No labor entries this month yet — hours appear after techs log time on work orders in AppFolio.</td></tr>
+                ) : bh.techs.map((t) => (
+                  <tr key={t.tech}>
+                    <td style={{ ...td, textAlign: "left", fontWeight: 600 }}>{t.tech}</td>
+                    <td style={td}>{fmt.num(t.logged)}</td>
+                    <td style={td}>
+                      <input type="number" min="0" step="0.5" style={inputStyle}
+                        value={val(t.tech, "pto", t.pto)} onChange={(e) => setVal(t.tech, "pto", e.target.value)} />
+                    </td>
+                    <td style={td}>
+                      <input type="number" min="0" step="0.5" style={inputStyle}
+                        value={val(t.tech, "extra", t.extra)} onChange={(e) => setVal(t.tech, "extra", e.target.value)} />
+                    </td>
+                    <td style={{ ...td, fontWeight: 600 }}>{fmt.num(t.billable)}</td>
+                    <td style={td}>{fmt.num(t.available)}</td>
+                    <td style={{ ...td, fontWeight: 600, color: t.utilization >= 70 ? C.green : t.utilization >= 50 ? C.amber : C.red }}>{fmt.pct(t.utilization)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px" }}>
+              <button onClick={save} disabled={!dirty || saving}
+                style={{ background: dirty ? C.gold : "#E5DFCE", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontWeight: 600, fontSize: 12.5, cursor: dirty ? "pointer" : "default" }}>
+                {saving ? "Saving…" : "Save Adjustments"}
+              </button>
+              {err ? <span style={{ fontSize: 12, color: C.red }}>Could not save: {err}</span> : null}
+              {!err && savedAt && !dirty ? <span style={{ fontSize: 12, color: C.green }}>Saved ✓</span> : null}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function OperationsTab({ d, rangeLabel }) {
+      const ops = d.operations || {};
+      const mi = ops.moveInQuality || {};
+      const wa = ops.woAging || {};
+      const ins = ops.insurance || { tenants: {}, vendors: {}, owners: {} };
+      return (
+        <div>
+          {ops.billableHours ? <TechHoursSection initial={ops.billableHours} /> : null}
+
+          <SectionHeader title="Move-in Quality" subtitle={"Move-ins · " + rangeLabel + " · counts non-turnover work orders created within 30 days of move-in (unit turns, locks, blinds & make-ready excluded)"} />
+          <div style={gridAuto(200)}>
+            <KpiCard label="Move-ins" value={fmt.num(mi.total)} sub={rangeLabel} drill="moveInsAll" />
+            <KpiCard label="No Work Orders" value={fmt.num(mi.withoutWo)} tone="good" sub="Clean move-ins" drill="moveInsClean" />
+            <KpiCard label="Generated Work Orders" value={fmt.num(mi.withWo)} tone={mi.withWo ? "warn" : "good"} drill="moveInsWithWo" />
+            <KpiCard label="Clean Move-in Rate" value={fmt.pct(mi.cleanRate)} tone={mi.cleanRate >= 80 ? "good" : "warn"} drill="moveInsAll" />
+          </div>
+
+          <SectionHeader title="Work Order Aging" subtitle="How long work stays open" />
+          <div style={gridAuto(200)}>
+            <KpiCard live label="Open 30+ Days" value={fmt.num(wa.openOver30)} tone={wa.openOver30 ? "bad" : "good"} drill="woOver30" />
+            <KpiCard live label="Avg Age of Open WOs" value={fmt.num(wa.avgOpenAge)} unit="days" tone={wa.avgOpenAge > 30 ? "warn" : "good"} drill="woOver30" />
+            <KpiCard label="Closed Within 30 Days" value={fmt.pct(wa.closedWithin30Pct)} tone={wa.closedWithin30Pct >= 90 ? "good" : "warn"} sub={rangeLabel} drill="woClosed" />
+            <KpiCard label="Completed" value={fmt.num(wa.closedTotal)} sub={rangeLabel} drill="woClosed" />
+          </div>
+
+          <SectionHeader title="Insurance Compliance — Tenants" subtitle={fmt.num(ins.tenants.tracked) + " current tenants with a policy on file · " + fmt.num(ins.tenants.commercialTracked) + " commercial"} />
+          <div style={gridAuto(200)}>
+            <KpiCard live label="Expired Policies" value={fmt.num(ins.tenants.expired)} tone={ins.tenants.expired ? "bad" : "good"} drill="tenantInsExpired" />
+            <KpiCard live label="Expiring ≤ 60 Days" value={fmt.num(ins.tenants.expiring)} tone={ins.tenants.expiring ? "warn" : "good"} drill="tenantInsExpiring" />
+            <KpiCard live label="Policies Tracked" value={fmt.num(ins.tenants.tracked)} drill="tenantInsAll" />
+          </div>
+
+          <SectionHeader title="Insurance Compliance — Vendors" subtitle="Liability insurance from the AppFolio vendor directory (vendors flagged do-not-use excluded)" />
+          <div style={gridAuto(200)}>
+            <KpiCard live label="Expired Liability" value={fmt.num(ins.vendors.expired)} tone={ins.vendors.expired ? "bad" : "good"} drill="vendorInsExpired" />
+            <KpiCard live label="Expiring ≤ 60 Days" value={fmt.num(ins.vendors.expiring)} tone={ins.vendors.expiring ? "warn" : "good"} drill="vendorInsExpiring" />
+            <KpiCard live label="No Policy on File" value={fmt.num(ins.vendors.missing)} tone={ins.vendors.missing ? "warn" : "good"} drill="vendorInsMissing" />
+            <KpiCard live label="Policies Tracked" value={fmt.num(ins.vendors.tracked)} drill="vendorInsAll" />
+          </div>
+
+          <SectionHeader title="Insurance Compliance — Properties / Owners" subtitle="Property insurance expiration from the AppFolio property directory" />
+          <div style={gridAuto(200)}>
+            <KpiCard live label="Expired" value={fmt.num(ins.owners.expired)} tone={ins.owners.expired ? "bad" : "good"} drill="ownerInsExpired" />
+            <KpiCard live label="Expiring ≤ 60 Days" value={fmt.num(ins.owners.expiring)} tone={ins.owners.expiring ? "warn" : "good"} drill="ownerInsExpiring" />
+            <KpiCard live label="No Date on File" value={fmt.num(ins.owners.missing)} tone={ins.owners.missing ? "warn" : "good"} drill="ownerInsMissing" />
+            <KpiCard live label="Policies Tracked" value={fmt.num(ins.owners.tracked)} drill="ownerInsAll" />
+          </div>
+        </div>
+      );
+    }
+
     function CeoTab({ d }) {
       const [authed, setAuthed] = useState(false);
       const [pw, setPw] = useState("");
@@ -751,6 +909,7 @@
       const tabs = [
         { id: "dashboard", label: "Dashboard" },
         { id: "leasing", label: "Leasing & Marketing" },
+        { id: "operations", label: "Operations" },
         { id: "ceo", label: "CEO View" },
       ];
       const rangeOptions = [
@@ -828,6 +987,7 @@
                 <>
                   {tab === "dashboard" && <DashboardTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "leasing" && <LeasingTab d={data.dashboard} rangeLabel={rangeLabel} />}
+                  {tab === "operations" && <OperationsTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "ceo" && <CeoTab d={data.dashboard} />}
                   {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
                     <div style={{ marginTop: 20, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.amber, borderRadius: 10, padding: 18 }}>

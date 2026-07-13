@@ -204,7 +204,58 @@ function migrate() {
       value REAL,
       created_at TEXT
     );
+
+    -- Maintenance labor entries (from work_order_labor_summary)
+    CREATE TABLE IF NOT EXISTS labor_entries (
+      id TEXT PRIMARY KEY,
+      work_date TEXT,          -- YYYY-MM-DD
+      tech TEXT,
+      property_name TEXT, unit TEXT,
+      worked_hours REAL DEFAULT 0,
+      work_order_number TEXT,
+      work_order_status TEXT,
+      description TEXT,
+      work_order_id TEXT,
+      synced_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_labor_date ON labor_entries(work_date);
+    CREATE INDEX IF NOT EXISTS idx_labor_tech ON labor_entries(tech);
+
+    -- Manual monthly adjustments per tech: PTO/sick + billable hours worked
+    -- outside AppFolio (special projects). Keyed by month + tech.
+    CREATE TABLE IF NOT EXISTS labor_adjustments (
+      period TEXT NOT NULL,    -- YYYY-MM
+      tech TEXT NOT NULL,
+      pto_hours REAL DEFAULT 0,
+      extra_hours REAL DEFAULT 0,
+      updated_at TEXT,
+      PRIMARY KEY (period, tech)
+    );
+
+    -- Tenant insurance (from tenant_directory)
+    CREATE TABLE IF NOT EXISTS tenant_insurance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_name TEXT,
+      property_name TEXT, unit TEXT,
+      tenant_type TEXT,           -- e.g. Commercial / Residential
+      commercial_lease_type TEXT,
+      status TEXT,
+      insurance_company TEXT,
+      policy_number TEXT,
+      insurance_expiration TEXT,  -- YYYY-MM-DD
+      synced_at TEXT
+    );
   `);
+
+  // Additive columns on existing tables (ignore "duplicate column" errors).
+  const addCol = (table, col, type) => {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch {}
+  };
+  addCol("vendors", "auto_ins_expires", "TEXT");
+  addCol("vendors", "epa_cert_expires", "TEXT");
+  addCol("vendors", "state_lic_expires", "TEXT");
+  addCol("properties", "insurance_expiration", "TEXT");
+  addCol("properties", "owners", "TEXT");
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
