@@ -11,11 +11,21 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
 
-// ── Password protection (HTTP Basic Auth) ─────────────────────────────────
+// ── Password protection (cookie session, password only) ───────────────────
 // Gates the entire dashboard — static page, API, everything — behind a single
-// password supplied via the DASHBOARD_PASSWORD env var. Any username is
-// accepted; only the password is checked (with a constant-time comparison).
+// password supplied via the DASHBOARD_PASSWORD env var. Users sign in on a
+// custom /login.html page (password only, no username); success sets an
+// HttpOnly session cookie derived from the password, so changing the
+// password invalidates all existing sessions.
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "";
+const SESSION_TOKEN = crypto
+  .createHmac("sha256", DASHBOARD_PASSWORD || "unconfigured")
+  .update("rmc-dashboard-session-v1")
+  .digest("hex");
+const SESSION_COOKIE = "rmc_auth";
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
+// SameSite=None + Secure so the cookie works inside HTTPS iframe previews.
+const COOKIE_ATTRS = "; HttpOnly; Path=/; SameSite=None; Secure";
 
 function safeEqual(a, b) {
   const ab = Buffer.from(String(a));
@@ -23,6 +33,38 @@ function safeEqual(a, b) {
   if (ab.length !== bb.length) return false;
   return crypto.timingSafeEqual(ab, bb);
 }
+
+function getCookie(req, name) {
+  const raw = req.headers.cookie || "";
+  for (const part of raw.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+app.use(express.json());
+
+app.post("/api/login", (req, res) => {
+  if (!DASHBOARD_PASSWORD) {
+    return res.status(500).json({ error: "DASHBOARD_PASSWORD is not configured on the server." });
+  }
+  const password = String((req.body && req.body.password) || "");
+  if (!safeEqual(password, DASHBOARD_PASSWORD)) {
+    return res.status(401).json({ error: "Incorrect password" });
+  }
+  res.set("Set-Cookie", `${SESSION_COOKIE}=${SESSION_TOKEN}; Max-Age=${SESSION_MAX_AGE}${COOKIE_ATTRS}`);
+  res.json({ ok: true });
+});
+
+const PUBLIC_PATHS = new Set(["/login.html", "/logo.png", "/favicon.ico"]);
 
 app.use((req, res, next) => {
   // Fail closed: if no password is configured, the dashboard stays locked
@@ -32,18 +74,21 @@ app.use((req, res, next) => {
       .status(500)
       .send("DASHBOARD_PASSWORD is not configured on the server.");
   }
-  const header = req.headers.authorization || "";
-  const [scheme, encoded] = header.split(" ");
-  if (scheme === "Basic" && encoded) {
-    const decoded = Buffer.from(encoded, "base64").toString("utf8");
-    const password = decoded.slice(decoded.indexOf(":") + 1);
-    if (safeEqual(password, DASHBOARD_PASSWORD)) return next();
+  if (PUBLIC_PATHS.has(req.path)) return next();
+  const token = getCookie(req, SESSION_COOKIE);
+  if (token && safeEqual(token, SESSION_TOKEN)) return next();
+  if (req.path.startsWith("/api/")) {
+    return res.status(401).json({ error: "Authentication required" });
   }
-  res.set("WWW-Authenticate", 'Basic realm="RMC Dashboard", charset="UTF-8"');
-  return res.status(401).send("Authentication required.");
+  return res.redirect("/login.html");
 });
 
-app.use(express.json());
+// Behind the auth gate: only signed-in users can log out their session.
+app.post("/api/logout", (req, res) => {
+  res.set("Set-Cookie", `${SESSION_COOKIE}=; Max-Age=0${COOKIE_ATTRS}`);
+  res.json({ ok: true });
+});
+
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 // ── Initialize DB ─────────────────────────────────────────────────────────

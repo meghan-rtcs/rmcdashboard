@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RMC Dashboard — Sign In</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #FBF7F0;
+      color: #1A1A1A;
+      -webkit-font-smoothing: antialiased;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      background: #FFFFFF;
+      border: 1px solid #EDE5D8;
+      border-radius: 14px;
+      padding: 34px 36px 30px;
+      box-shadow: 0 6px 24px rgba(26, 26, 26, 0.06);
+      text-align: center;
+    }
+    .logo { height: 74px; margin-bottom: 18px; }
+    .eyebrow {
+      font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em;
+      text-transform: uppercase; color: #8A8375; margin-bottom: 6px;
+    }
+    h1 { font-size: 17px; font-weight: 600; margin-bottom: 22px; }
+    input[type="password"] {
+      width: 100%;
+      padding: 11px 13px;
+      border: 1px solid #E4DCCD;
+      border-radius: 8px;
+      font-size: 14.5px;
+      font-family: inherit;
+      outline: none;
+      margin-bottom: 12px;
+      transition: border-color .15s, box-shadow .15s;
+      background: #FDFBF7;
+    }
+    input[type="password"]:focus { border-color: #E0A028; box-shadow: 0 0 0 3px rgba(224,160,40,0.14); }
+    input.error { border-color: #C0392B; }
+    button {
+      width: 100%;
+      padding: 11px;
+      background: #1A1A1A;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14.5px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+    }
+    button:hover { background: #333; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .msg { min-height: 20px; font-size: 12.5px; color: #C0392B; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <form class="card" id="form">
+    <img src="/logo.png" alt="Real Management Company" class="logo" />
+    <div class="eyebrow">RMC Dashboard</div>
+    <h1>Enter password to continue</h1>
+    <input type="password" id="pw" placeholder="Password" autocomplete="current-password" autofocus />
+    <button type="submit" id="btn">Unlock</button>
+    <div class="msg" id="msg"></div>
+  </form>
+  <script>
+    const form = document.getElementById("form");
+    const pw = document.getElementById("pw");
+    const btn = document.getElementById("btn");
+    const msg = document.getElementById("msg");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      msg.textContent = "";
+      pw.classList.remove("error");
+      btn.disabled = true;
+      btn.textContent = "Checking…";
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pw.value }),
+        });
+        if (res.ok) {
+          window.location.replace("/");
+          return;
+        }
+        pw.classList.add("error");
+        msg.textContent = res.status === 401 ? "Incorrect password" : "Something went wrong — try again";
+        pw.select();
+      } catch (err) {
+        msg.textContent = "Network error — try again";
+      }
+      btn.disabled = false;
+      btn.textContent = "Unlock";
+    });
+  </script>
+</body>
+</html>

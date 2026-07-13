@@ -24,4 +24,11 @@ Confirmed for this account:
 
 **`renewal_summary.json` — needs a WIDE window AND `statuses:["all"]`, then dedupe.** It is NOT empty (earlier belief was wrong): a trailing-12-month window returned 0 only because this account's renewals are historical (all 2020–2021). Use `start_on_from:"2010-01-01"` to a future `start_on_to`. `start_on` filters by the *new* lease's start. Without `statuses:["all"]` it returns only `Renewed` (53); with it you also get `Canceled by User` (→69) which you NEED for a real renewal-rate denominator. AppFolio then emits the SAME renewal event twice — once `Canceled by User` (superseded draft) and once `Renewed`. Dedupe by `occupancy_id|lease_start|lease_end`, keeping the `Renewed` row when present (genuinely distinct renewals of one lease have different lease_end, so they survive). Fields: new lease = `lease_start`/`lease_end`, prior = `previous_lease_start/end`; new rent = `rent` (NOT `new_rent`); unit = `unit_name`; status = `status`. No `Month To Month` status appears here, so MTM-lease metrics stay legitimately 0.
 
+**Labor / tickler / insurance sources (probed, confirmed):**
+- `work_order_labor_summary.json` — 200. Filter `labor_performed_from/to`. Fields: `worked_hours`, `hours`, `maintenance_tech`, `date`, `work_order_number/status`, `unit_turn_id`, timer fields. Basis for billable-hours metrics.
+- `tenant_tickler.json` — 200. Event-style rows: `event`, `occurred_date`, `move_in_date`, `move_out_date`, `lease_from/to`, tenant/unit/property ids. (NOT `tickler.json` → 400.)
+- `renters_insurance.json` → 400 (not a valid report). Tenant insurance lives on `tenant_directory`: `insurance_company_name`, `insurance_expiration`, `insurance_policy_number` (populated for many tenants).
+- `vendor_directory` insurance fields: `liability_ins_expires`, `workers_comp_expires`, `auto_ins_expires`, `epa_cert_expires`, `state_lic_expires`, `contract_expires`.
+- `property_directory` has `insurance_expiration` (owner/property policy) + `home_warranty_expiration`, `contract_expirations`.
+
 **`showings.json` empty for this account:** returns 0 rows even over a 2-year window. Standalone-showings data isn't exposed here; showing activity is embedded per-guest-card (`showings` count field on `guest_card_inquiries`). Don't chase a code bug — it's a data-availability gap.
