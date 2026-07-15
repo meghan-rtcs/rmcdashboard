@@ -37,32 +37,44 @@ function many(sql, params = []) {
 // preset range. Point-in-time metrics (current occupancy, delinquency, open
 // work orders, etc.) ignore it. Values are drawn from a fixed whitelist, so
 // they are safe to interpolate into SQL.
-const RANGE_MODIFIERS = {
-  "15d": "-15 days",
-  "30d": "-30 days",
-  "90d": "-90 days",
-  "6mo": "-6 months",
-  "12mo": "-12 months",
-  all: null,
-};
 const RANGE_LABELS = {
-  "15d": "last 15 days",
-  "30d": "last 30 days",
-  "90d": "last 90 days",
-  "6mo": "last 6 months",
-  "12mo": "last 12 months",
-  all: "all time",
+  this_month: "this month",
+  last_month: "last month",
+  this_quarter: "this quarter",
+  last_quarter: "last quarter",
+  this_year: "this year",
+  last_year: "last year",
 };
-export const DEFAULT_RANGE = "30d";
+export const DEFAULT_RANGE = "this_month";
 export function normalizeRange(range) {
-  return Object.prototype.hasOwnProperty.call(RANGE_MODIFIERS, range)
+  return Object.prototype.hasOwnProperty.call(RANGE_LABELS, range)
     ? range
     : DEFAULT_RANGE;
 }
-// SQL boolean clause: is `col` within the selected range?
+// Calendar bounds [start, end) for a range key, as local YYYY-MM-DD strings.
+function rangeBounds(range) {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const q = Math.floor(m / 3);
+  const d = (yy, mm) => {
+    const dt = new Date(yy, mm, 1);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-01`;
+  };
+  switch (normalizeRange(range)) {
+    case "this_month": return [d(y, m), d(y, m + 1)];
+    case "last_month": return [d(y, m - 1), d(y, m)];
+    case "this_quarter": return [d(y, q * 3), d(y, q * 3 + 3)];
+    case "last_quarter": return [d(y, q * 3 - 3), d(y, q * 3)];
+    case "this_year": return [d(y, 0), d(y + 1, 0)];
+    case "last_year": return [d(y - 1, 0), d(y, 0)];
+  }
+}
+// SQL boolean clause: is `col` within the selected calendar period? Bounds are
+// server-computed date literals (never user input), so safe to interpolate.
 function within(col, range) {
-  const mod = RANGE_MODIFIERS[normalizeRange(range)];
-  return mod ? `${col} >= date('now','${mod}')` : "1=1";
+  const [start, end] = rangeBounds(range);
+  return `${col} >= '${start}' AND ${col} < '${end}'`;
 }
 function rangeLabel(range) {
   return RANGE_LABELS[normalizeRange(range)];

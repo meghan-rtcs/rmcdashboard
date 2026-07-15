@@ -125,7 +125,7 @@ function getDashboard(range) {
 
 app.get("/api/dashboard", async (req, res) => {
   try {
-    const range = normalizeRange(String(req.query.range || "30d"));
+    const range = normalizeRange(String(req.query.range || "this_month"));
     const data = await getDashboard(range);
     res.json(data);
   } catch (err) {
@@ -138,7 +138,7 @@ app.get("/api/dashboard", async (req, res) => {
 app.get("/api/drilldown/:key", async (req, res) => {
   try {
     const { getDrilldown } = await import("./lib/aggregator.js");
-    const dd = await getDrilldown(req.params.key, normalizeRange(String(req.query.range || "30d")));
+    const dd = await getDrilldown(req.params.key, normalizeRange(String(req.query.range || "this_month")));
     if (!dd) return res.status(404).json({ error: "Unknown drilldown: " + req.params.key });
     res.json(dd);
   } catch (err) {

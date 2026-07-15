@@ -880,7 +880,7 @@
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [tab, setTab] = useState("dashboard");
-      const [range, setRange] = useState("30d");
+      const [range, setRange] = useState("this_month");
       const [syncing, setSyncing] = useState(false);
       const [activeDrill, setActiveDrill] = useState(null);
       const [drillData, setDrillData] = useState(null);
@@ -913,14 +913,14 @@
         { id: "ceo", label: "CEO View" },
       ];
       const rangeOptions = [
-        { id: "15d", label: "15D", full: "Last 15 days" },
-        { id: "30d", label: "30D", full: "Last 30 days" },
-        { id: "90d", label: "90D", full: "Last 90 days" },
-        { id: "6mo", label: "6M", full: "Last 6 months" },
-        { id: "12mo", label: "12M", full: "Last 12 months" },
-        { id: "all", label: "All", full: "All time" },
+        { id: "this_month", label: "This Mo", full: "This month" },
+        { id: "last_month", label: "Last Mo", full: "Last month" },
+        { id: "this_quarter", label: "This Qtr", full: "This quarter" },
+        { id: "last_quarter", label: "Last Qtr", full: "Last quarter" },
+        { id: "this_year", label: "This Yr", full: "This year" },
+        { id: "last_year", label: "Last Yr", full: "Last year" },
       ];
-      const rangeLabel = (rangeOptions.find((r) => r.id === range) || {}).full || "Last 30 days";
+      const rangeLabel = (rangeOptions.find((r) => r.id === range) || {}).full || "This month";
 
       const openDrill = (key) => {
         setActiveDrill(key);
