@@ -79,6 +79,15 @@ function within(col, range) {
 function rangeLabel(range) {
   return RANGE_LABELS[normalizeRange(range)];
 }
+// Stable key-safe slug for a late fee policy label (drilldown keys). A short
+// hash of the full label is appended so distinct labels that sanitize to the
+// same text (e.g. "Flat $42.5" vs "Flat $42_5") can never collide.
+function policySlug(label) {
+  const s = String(label);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return s.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") + "_" + h.toString(36);
+}
 
 // ── Sections ──────────────────────────────────────────────────────────────
 
@@ -190,6 +199,20 @@ async function buildFinancials() {
   const aging = one(
     "SELECT SUM(current_amount) current, SUM(thirty_plus) thirty, SUM(sixty_plus) sixty, SUM(ninety_plus) ninety FROM delinquency"
   );
+
+  // Delinquency broken down by the late fee policy each occupancy falls under
+  // (resolved at sync time from AppFolio's late_fee_policy_comparison report).
+  const delinquencyByPolicy = many(
+    `SELECT COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') policy,
+            COUNT(*) count, SUM(amount_receivable) amount
+     FROM delinquency WHERE amount_receivable > 0
+     GROUP BY 1 ORDER BY amount DESC`
+  ).map((r) => ({
+    policy: r.policy,
+    count: num(r.count),
+    amount: round(r.amount, 2),
+    drill: "delinquencyPolicy_" + policySlug(r.policy),
+  }));
   const avgRentPerDoor = round(
     one("SELECT AVG(current_rent) a FROM units WHERE current_rent > 0").a,
     2
@@ -220,6 +243,7 @@ async function buildFinancials() {
     delinquent,
     delinquentCount,
     delinquencyRate,
+    delinquencyByPolicy,
     aging: {
       current: round(aging.current, 2),
       thirtyPlus: round(aging.thirty, 2),
@@ -746,6 +770,17 @@ function drillRegistry(range) {
     `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE sixty_plus > 0 ORDER BY sixty_plus DESC LIMIT ${LIM}`);
   dd.delinquency90 = make("90+ Days Past Due", delCols,
     `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE ninety_plus > 0 ORDER BY ninety_plus DESC LIMIT ${LIM}`);
+  // One drilldown per distinct late fee policy among delinquent accounts.
+  const delPolicyCols = [{ key: "late_fee_policy", label: "Late Fee Policy" }, ...delCols];
+  for (const { policy } of many(
+    `SELECT DISTINCT COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') policy FROM delinquency WHERE amount_receivable > 0`
+  )) {
+    dd["delinquencyPolicy_" + policySlug(policy)] = make(`Delinquent — ${policy}`, delPolicyCols,
+      `SELECT COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') late_fee_policy, property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus
+       FROM delinquency
+       WHERE amount_receivable > 0 AND COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') = '${policy.replace(/'/g, "''")}'
+       ORDER BY amount_receivable DESC LIMIT ${LIM}`);
+  }
 
   // Maintenance
   const woOpen = "status NOT IN ('Completed','Canceled','Completed No Need To Bill')";

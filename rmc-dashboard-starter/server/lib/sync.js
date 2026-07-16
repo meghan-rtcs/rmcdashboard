@@ -52,11 +52,53 @@ export async function syncAll() {
     console.log(`[sync] Rent roll: ${mapped.length} units`);
   } catch (e) { errors.push(`rent_roll: ${e.message}`); console.error("[sync]", e.message); }
 
-  // ── 2. Delinquency ──────────────────────────────────────────────────────
+  // ── 2. Delinquency (+ late fee policy resolution) ───────────────────────
   try {
-    const rows = await appfolio.delinquency();
+    // Each delinquent occupancy is tagged with its active late fee policy from
+    // the late_fee_policy_comparison report: occupancy-level overrides win over
+    // property-level defaults; among duplicates the latest effective_date wins.
+    const [rows, policyRows] = await Promise.all([
+      appfolio.delinquency(),
+      appfolio.lateFeePolicyComparison().catch((e) => {
+        console.warn("[sync] late_fee_policy_comparison unavailable:", e.message);
+        return [];
+      }),
+    ]);
+    const today = new Date().toISOString().slice(0, 10);
+    const active = policyRows.filter(
+      (p) => (!p.effective_date || p.effective_date <= today) && (!p.end_date || p.end_date > today)
+    );
+    const newest = (a, b) => String(b.effective_date || "").localeCompare(String(a.effective_date || ""));
+    const byOcc = new Map(), byProp = new Map();
+    for (const p of active) {
+      if (p.occupancy_id) {
+        const k = String(p.occupancy_id);
+        if (!byOcc.has(k)) byOcc.set(k, []);
+        byOcc.get(k).push(p);
+      } else if (p.property_id) {
+        const k = String(p.property_id);
+        if (!byProp.has(k)) byProp.set(k, []);
+        byProp.get(k).push(p);
+      }
+    }
+    const policyLabel = (p) => {
+      if (!p) return "No Policy Found";
+      const base = parseFloat(p.late_fee_base_amount) || 0;
+      const daily = parseFloat(p.late_fee_daily_amount) || 0;
+      if (p.late_fee_type === "Percentage") {
+        return base + "% of " + (p.eligible_charge_type === "All" ? "All Charges" : "Rent");
+      }
+      if (base === 0 && daily === 0) return "No Late Fee (Flat $0)";
+      return "Flat $" + base + (daily ? " + $" + daily + "/day" : "");
+    };
+    const resolvePolicy = (r) => {
+      const occ = r.occupancy_id ? (byOcc.get(String(r.occupancy_id)) || []).slice().sort(newest)[0] : null;
+      const prop = r.property_id ? (byProp.get(String(r.property_id)) || []).slice().sort(newest)[0] : null;
+      return policyLabel(occ || prop);
+    };
     clearTable("delinquency");
     const mapped = rows.map((r, i) => ({
+      late_fee_policy: resolvePolicy(r),
       property_name: r.property_name || r.property || "",
       property_id: r.property_id ? String(r.property_id) : "",
       unit: r.unit || "", unit_id: r.unit_id ? String(r.unit_id) : "",
@@ -73,7 +115,7 @@ export async function syncAll() {
     }));
     const cols = ["property_name","property_id","unit","unit_id","tenant_name","tenant_id",
       "tenant_status","amount_receivable","current_amount","thirty_plus","sixty_plus",
-      "ninety_plus","in_collections","synced_at"];
+      "ninety_plus","in_collections","late_fee_policy","synced_at"];
     if (mapped.length) upsertMany("delinquency", mapped, cols);
     totalRecords += mapped.length;
     console.log(`[sync] Delinquency: ${mapped.length} rows`);

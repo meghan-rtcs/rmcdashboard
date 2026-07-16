@@ -538,6 +538,22 @@
             <KpiCard live label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
           </div>
 
+          {/* DELINQUENCY BY LATE FEE POLICY */}
+          {(f.delinquencyByPolicy || []).length > 0 ? (
+            <>
+              <SectionHeader title="Delinquency by Late Fee Policy"
+                subtitle={fmt.money(f.delinquent) + " total across " + f.delinquentCount + " accounts, split by the late fee policy each tenancy falls under"} />
+              <div style={gridAuto(200)}>
+                <KpiCard big live label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
+                {f.delinquencyByPolicy.map((p) => (
+                  <KpiCard key={p.drill} live label={p.policy} value={fmt.money(p.amount)}
+                    tone={/no late fee|no policy/i.test(p.policy) ? "warn" : undefined}
+                    sub={p.count + (p.count === 1 ? " account" : " accounts")} drill={p.drill} />
+                ))}
+              </div>
+            </>
+          ) : null}
+
           {/* OCCUPANCY */}
           <SectionHeader title="Occupancy & Portfolio" />
           <div style={gridCols(3)}>
@@ -861,6 +877,15 @@
               <HBars rows={aging} valueFmt={fmt.money2} height={14} />
             </ChartCard>
           </div>
+          {(f.delinquencyByPolicy || []).length > 0 ? (
+            <div style={{ ...gridAuto(200), marginTop: 12 }}>
+              {f.delinquencyByPolicy.map((p) => (
+                <KpiCard key={p.drill} live label={p.policy} value={fmt.money(p.amount)}
+                  tone={/no late fee|no policy/i.test(p.policy) ? "warn" : undefined}
+                  sub={p.count + (p.count === 1 ? " account" : " accounts")} drill={p.drill} />
+              ))}
+            </div>
+          ) : null}
 
           <SectionHeader title="Renewals & Portfolio" />
           <div style={gridAuto(180)}>

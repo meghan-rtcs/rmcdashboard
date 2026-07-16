@@ -32,3 +32,5 @@ Confirmed for this account:
 - `property_directory` has `insurance_expiration` (owner/property policy) + `home_warranty_expiration`, `contract_expirations`.
 
 **`showings.json` empty for this account:** returns 0 rows even over a 2-year window. Standalone-showings data isn't exposed here; showing activity is embedded per-guest-card (`showings` count field on `guest_card_inquiries`). Don't chase a code bug — it's a data-availability gap.
+
+**`late_fee_policy_comparison.json`** — 200, valid. One row per policy: property-level defaults (occupancy_id null) + per-occupancy overrides. Fields: late_fee_type (Flat/Percentage), late_fee_base_amount, late_fee_daily_amount, eligible_charge_type (All/Recurring Rent Only), rent_grace_days, effective_date/end_date, property_id, occupancy_id. Resolve active policy per occupancy: filter effective_date<=today<end_date, occupancy override beats property default, latest effective_date wins. Delinquency report itself has NO policy field (its `late` field = count of late payments).

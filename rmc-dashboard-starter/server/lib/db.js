@@ -256,6 +256,7 @@ function migrate() {
   addCol("vendors", "state_lic_expires", "TEXT");
   addCol("properties", "insurance_expiration", "TEXT");
   addCol("properties", "owners", "TEXT");
+  addCol("delinquency", "late_fee_policy", "TEXT");
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
