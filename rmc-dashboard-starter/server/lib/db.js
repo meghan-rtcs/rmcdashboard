@@ -70,6 +70,18 @@ function migrate() {
       synced_at TEXT
     );
 
+    -- Owner insurance policies (from owner_insurance report). AppFolio is
+    -- phasing out the property-page expiration date, so this report is the
+    -- source of truth for property/owner insurance compliance.
+    CREATE TABLE IF NOT EXISTS owner_insurance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT, policy_number TEXT,
+      properties TEXT, owners TEXT,
+      start_date TEXT, expiration_date TEXT,
+      type TEXT, additionally_insured TEXT,
+      synced_at TEXT
+    );
+
     -- Renewals (from renewal_summary)
     CREATE TABLE IF NOT EXISTS renewals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -486,7 +486,6 @@
     // ── Tabs ────────────────────────────────────────────────────────────────
     function DashboardTab({ d, rangeLabel }) {
       const o = d.occupancy, l = d.leasing, f = d.financials, m = d.marketing, w = d.maintenance, ch = d.charts;
-      const revData = (ch.monthlyRevenue || []).map((r) => ({ label: fmt.monthShort(r.month), gross: r.gross, net: r.net, expense: r.expense }));
       const occData = (ch.occupancyTrend || []).map((r) => ({ label: fmt.monthShort(r.month), rate: r.rate }));
       const occSpark = (ch.occupancyTrend || []).map((r) => r.rate).filter((v) => v > 0);
       const delSpark = (ch.delinquencyTrend || []).map((r) => r.total).filter((v) => v > 0);
@@ -515,27 +514,15 @@
             <KpiCard big live label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} sub={fmt.num(w.avgDaysToComplete) + "d avg to close"} drill="openWorkOrders" />
           </div>
 
-          {/* FINANCIALS */}
-          <SectionHeader title="Financials" subtitle="Income, collection & delinquency" />
+          {/* DELINQUENCY (income/expense financials live on the CEO View) */}
+          <SectionHeader title="Delinquency" subtitle="Outstanding balances & aging" />
           <div style={gridCols(3)}>
-            <ChartCard span={2} title="Revenue vs Expense — 12 months" subtitle="Gross income, expense and net by month"
-              legend={<LegendInline items={[{ c: C.gold, l: "Gross" }, { c: C.red, l: "Expense" }, { c: C.green, l: "Net" }]} />}
-              drill="grossIncome">
-              <LineChart data={revData} height={170} yFmt={fmt.moneyAxis}
-                series={[
-                  { key: "gross", name: "Gross", color: C.gold, width: 2.4 },
-                  { key: "expense", name: "Expense", color: C.red, width: 1.8 },
-                  { key: "net", name: "Net", color: C.green, width: 1.8 },
-                ]} />
-            </ChartCard>
-            <ChartCard title="Delinquency aging" subtitle={fmt.money(f.delinquent) + " across " + f.delinquentCount + " accounts"} drill="delinquency">
+            <ChartCard span={2} title="Delinquency aging" subtitle={fmt.money(f.delinquent) + " across " + f.delinquentCount + " accounts"} drill="delinquency">
               <HBars rows={aging} valueFmt={fmt.money} height={13} />
             </ChartCard>
-          </div>
-          <div style={{ ...gridAuto(180), marginTop: 12 }}>
-            <KpiCard live label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
-            <KpiCard live label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
-            <KpiCard live label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
+            <div>
+              <KpiCard big live label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} sub="of monthly scheduled rent" drill="delinquency" />
+            </div>
           </div>
 
           {/* DELINQUENCY BY CHARGE TYPE (rent vs utilities) */}
@@ -817,11 +804,11 @@
             <KpiCard live label="Policies Tracked" value={fmt.num(ins.vendors.tracked)} drill="vendorInsAll" />
           </div>
 
-          <SectionHeader title="Insurance Compliance — Properties / Owners" subtitle="Property insurance expiration from the AppFolio property directory" />
+          <SectionHeader title="Insurance Compliance — Properties / Owners" subtitle="Owner insurance policies from the AppFolio Owner Insurance report (property-page expiration dates are being phased out)" />
           <div style={gridAuto(200)}>
             <KpiCard live label="Expired" value={fmt.num(ins.owners.expired)} tone={ins.owners.expired ? "bad" : "good"} drill="ownerInsExpired" />
             <KpiCard live label="Expiring ≤ 60 Days" value={fmt.num(ins.owners.expiring)} tone={ins.owners.expiring ? "warn" : "good"} drill="ownerInsExpiring" />
-            <KpiCard live label="No Date on File" value={fmt.num(ins.owners.missing)} tone={ins.owners.missing ? "warn" : "good"} drill="ownerInsMissing" />
+            <KpiCard live label="No Policy on File" value={fmt.num(ins.owners.missing)} tone={ins.owners.missing ? "warn" : "good"} drill="ownerInsMissing" />
             <KpiCard live label="Policies Tracked" value={fmt.num(ins.owners.tracked)} drill="ownerInsAll" />
           </div>
         </div>
@@ -868,6 +855,7 @@
             <KpiCard big live label="Gross Income (YTD)" value={fmt.money(f.grossIncome)} tone="good" drill="grossIncome" />
             <KpiCard big live label="Net Income (YTD)" value={fmt.money(f.netIncome)} tone={f.netIncome >= 0 ? "good" : "bad"} drill="netIncome" />
             <KpiCard big live label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
+            <KpiCard big live label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
             <KpiCard big live label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} drill="occupancy" />
           </div>
 

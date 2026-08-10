@@ -170,6 +170,7 @@ export const appfolio = {
   delinquency: (body = {}) => fetchAll("delinquency.json", body),
   lateFeePolicyComparison: (body = {}) => fetchAll("late_fee_policy_comparison.json", body),
   agedReceivablesDetail: (body = {}) => fetchAll("aged_receivables_detail.json", body),
+  ownerInsurance: (body = {}) => fetchAll("owner_insurance.json", body),
   delinquencyAsOf: (asOfDate, body = {}) =>
     fetchAll("delinquency_as_of.json", { occurred_on_to: asOfDate, ...body }),
   agedReceivableDetail: (asOfDate, body = {}) =>

@@ -570,7 +570,9 @@ function buildOperations(range) {
   const insurance = {
     tenants: expCounts("tenant_insurance", "insurance_expiration", tenantWhere),
     vendors: expCounts("vendors", "liability_expires", "status != 'do_not_use'"),
-    owners: expCounts("properties", "insurance_expiration"),
+    // Owner/property insurance now comes from the owner_insurance report
+    // (AppFolio is phasing out the property-page expiration date).
+    owners: expCounts("owner_insurance", "expiration_date"),
   };
   insurance.tenants.commercialTracked = num(one(
     `SELECT COUNT(*) c FROM tenant_insurance WHERE ${tenantWhere} AND insurance_expiration != ''
@@ -579,8 +581,19 @@ function buildOperations(range) {
   insurance.vendors.missing = num(one(
     "SELECT COUNT(*) c FROM vendors WHERE status != 'do_not_use' AND COALESCE(liability_expires,'') = ''"
   ).c);
+  // Properties with no owner-insurance policy covering them: a policy's
+  // "properties" field is a comma-separated list of property names, so match
+  // whole comma-delimited tokens (trimmed, case-insensitive) — plain substring
+  // matching would let "123 Main Street" falsely cover "Main Street".
   insurance.owners.missing = num(one(
-    "SELECT COUNT(*) c FROM properties WHERE COALESCE(insurance_expiration,'') = ''"
+    `SELECT COUNT(*) c FROM properties p
+     WHERE TRIM(COALESCE(p.property_name,'')) != ''
+       AND NOT EXISTS (
+       SELECT 1 FROM owner_insurance oi
+       WHERE oi.properties != ''
+         AND instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
+                   ',' || lower(trim(p.property_name)) || ',') > 0
+     )`
   ).c);
 
   return { billableHours, moveInQuality, woAging, insurance };
@@ -938,20 +951,36 @@ function drillRegistry(range) {
   dd.vendorInsAll = make("Vendor Insurance — All Tracked", vendorInsCols,
     `${vendorInsBase} AND liability_expires != '' ORDER BY liability_expires ASC LIMIT ${LIM}`);
 
+  // Owner/property insurance drilldowns now read from the owner_insurance
+  // report (AppFolio is phasing out the property-page expiration date).
   const ownerInsCols = [
+    { key: "provider", label: "Provider" },
+    { key: "policy_number", label: "Policy #" },
+    { key: "type", label: "Type" },
+    { key: "properties", label: "Properties" },
+    { key: "owners", label: "Owner" },
+    { key: "expiration_date", label: "Expires" },
+  ];
+  const ownerInsBase = `SELECT provider, policy_number, type, properties, owners, expiration_date FROM owner_insurance WHERE COALESCE(expiration_date,'') != ''`;
+  dd.ownerInsExpired = make("Owner Insurance — Expired", ownerInsCols,
+    `${ownerInsBase} AND date(expiration_date) < date('now') ORDER BY expiration_date ASC LIMIT ${LIM}`);
+  dd.ownerInsExpiring = make("Owner Insurance — Expiring in 60 Days", ownerInsCols,
+    `${ownerInsBase} AND date(expiration_date) >= date('now') AND date(expiration_date) <= date('now','+60 days') ORDER BY expiration_date ASC LIMIT ${LIM}`);
+  dd.ownerInsAll = make("Owner Insurance — All Policies", ownerInsCols,
+    `${ownerInsBase} ORDER BY expiration_date ASC LIMIT ${LIM}`);
+  dd.ownerInsMissing = make("Properties — No Owner Insurance Policy on File", [
     { key: "property_name", label: "Property" },
     { key: "owners", label: "Owner" },
     { key: "address", label: "Address" },
-    { key: "insurance_expiration", label: "Insurance Expires" },
-  ];
-  dd.ownerInsExpired = make("Property Insurance — Expired", ownerInsCols,
-    `SELECT property_name, owners, address, insurance_expiration FROM properties WHERE COALESCE(insurance_expiration,'') != '' AND date(insurance_expiration) < date('now') ORDER BY insurance_expiration ASC LIMIT ${LIM}`);
-  dd.ownerInsExpiring = make("Property Insurance — Expiring in 60 Days", ownerInsCols,
-    `SELECT property_name, owners, address, insurance_expiration FROM properties WHERE COALESCE(insurance_expiration,'') != '' AND date(insurance_expiration) >= date('now') AND date(insurance_expiration) <= date('now','+60 days') ORDER BY insurance_expiration ASC LIMIT ${LIM}`);
-  dd.ownerInsMissing = make("Properties — No Insurance Expiration on File", ownerInsCols,
-    `SELECT property_name, owners, address, insurance_expiration FROM properties WHERE COALESCE(insurance_expiration,'') = '' ORDER BY property_name LIMIT ${LIM}`);
-  dd.ownerInsAll = make("Property Insurance — All Tracked", ownerInsCols,
-    `SELECT property_name, owners, address, insurance_expiration FROM properties WHERE COALESCE(insurance_expiration,'') != '' ORDER BY insurance_expiration ASC LIMIT ${LIM}`);
+  ],
+    `SELECT property_name, owners, address FROM properties p
+     WHERE TRIM(COALESCE(p.property_name,'')) != ''
+       AND NOT EXISTS (
+       SELECT 1 FROM owner_insurance oi
+       WHERE oi.properties != ''
+         AND instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
+                   ',' || lower(trim(p.property_name)) || ',') > 0
+     ) ORDER BY property_name LIMIT ${LIM}`);
 
   dd.owners = make("Owners", [
     { key: "owner_name", label: "Owner" },

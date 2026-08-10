@@ -439,6 +439,30 @@ export async function syncAll() {
     console.log(`[sync] Tenant insurance: ${mapped.length} tenants`);
   } catch (e) { errors.push(`tenant_insurance: ${e.message}`); console.error("[sync]", e.message); }
 
+  // ── 14. Owner insurance policies (from owner_insurance report) ──────────
+  // AppFolio is phasing out the property-page expiration date, so this report
+  // is the source of truth for property/owner insurance compliance.
+  try {
+    const rows = await appfolio.ownerInsurance();
+    clearTable("owner_insurance");
+    const mapped = rows.map(r => ({
+      provider: r.provider || "",
+      policy_number: r.policy_number || "",
+      properties: r.properties || "",
+      owners: r.owners || "",
+      start_date: r.start_date || "",
+      expiration_date: r.expiration_date || "",
+      type: r.type || "",
+      additionally_insured: r.additionally_insured || "",
+      synced_at,
+    }));
+    const cols = ["provider","policy_number","properties","owners","start_date",
+      "expiration_date","type","additionally_insured","synced_at"];
+    if (mapped.length) upsertMany("owner_insurance", mapped, cols);
+    totalRecords += mapped.length;
+    console.log(`[sync] Owner insurance: ${mapped.length} policies`);
+  } catch (e) { errors.push(`owner_insurance: ${e.message}`); console.error("[sync]", e.message); }
+
   // ── Sync log ────────────────────────────────────────────────────────────
   const duration = Date.now() - start;
   run(`INSERT INTO sync_log (started_at, completed_at, status, records, errors, duration_ms)
