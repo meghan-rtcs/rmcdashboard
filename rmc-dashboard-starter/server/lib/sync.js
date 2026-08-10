@@ -121,6 +121,49 @@ export async function syncAll() {
     console.log(`[sync] Delinquency: ${mapped.length} rows`);
   } catch (e) { errors.push(`delinquency: ${e.message}`); console.error("[sync]", e.message); }
 
+  // ── 2b. Per-charge receivables (rent vs utilities split) ────────────────
+  // aged_receivables_detail has one row per unpaid charge with its GL account
+  // name, so delinquency can be split into Rent / Utilities / Other. "Owner
+  // Withdrawal" rows are non-tenant clearing entries the delinquency report
+  // excludes — skip them so the category totals reconcile with the total.
+  try {
+    const raw = await appfolio.agedReceivablesDetail();
+    const rows = Array.isArray(raw) ? raw : (raw && raw.results) || [];
+    const catFor = (name) => {
+      const n = String(name || "").toLowerCase();
+      if (n === "owner withdrawal") return null; // excluded
+      if (n === "rent" || n === "rent assistance payment") return "Rent";
+      if (n.includes("utilit") || n.includes("pass thru")) return "Utilities";
+      return "Other";
+    };
+    clearTable("receivable_charges");
+    const pf = (v) => (v ? parseFloat(v) || 0 : 0);
+    const mapped = rows
+      .map((r) => ({
+        property_name: r.property_name || "",
+        property_id: r.property_id ? String(r.property_id) : "",
+        unit_name: r.unit_name || "",
+        unit_id: r.unit_id ? String(r.unit_id) : "",
+        payer_name: r.payer_name || "",
+        occupancy_id: r.occupancy_id ? String(r.occupancy_id) : "",
+        account_name: r.account_name || "",
+        charge_category: catFor(r.account_name),
+        posting_date: r.posting_date || r.invoice_occurred_on || "",
+        amount_receivable: pf(r.amount_receivable),
+        thirty_plus: pf(r["30_plus"]),
+        sixty_plus: pf(r["60_plus"]),
+        ninety_plus: pf(r["90_plus"]),
+        synced_at,
+      }))
+      .filter((r) => r.charge_category);
+    const rcCols = ["property_name","property_id","unit_name","unit_id","payer_name",
+      "occupancy_id","account_name","charge_category","posting_date","amount_receivable",
+      "thirty_plus","sixty_plus","ninety_plus","synced_at"];
+    if (mapped.length) upsertMany("receivable_charges", mapped, rcCols);
+    totalRecords += mapped.length;
+    console.log(`[sync] Receivable charges: ${mapped.length} rows`);
+  } catch (e) { errors.push(`receivable_charges: ${e.message}`); console.error("[sync]", e.message); }
+
   // ── 3. Renewals (full history, deduplicated) ─────────────────────────────
   // renewal_summary needs statuses:["all"] to include non-renewed outcomes, but
   // AppFolio then emits the SAME renewal event twice — once "Canceled by User"

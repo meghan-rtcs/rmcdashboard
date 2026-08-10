@@ -213,6 +213,26 @@ async function buildFinancials() {
     amount: round(r.amount, 2),
     drill: "delinquencyPolicy_" + policySlug(r.policy),
   }));
+  // Delinquency split by charge type (rent vs utilities vs other), from the
+  // per-charge aged_receivables_detail rows categorized at sync time.
+  // Amounts are NET over all rows (credits included) so the tiles reconcile
+  // exactly with the total delinquency figure; counts only tally accounts
+  // with a positive balance in the category (i.e. accounts that actually owe).
+  const delinquencyByCharge = many(
+    `SELECT charge_category category,
+            COUNT(DISTINCT CASE WHEN amount_receivable > 0
+              THEN COALESCE(NULLIF(occupancy_id, ''), payer_name) END) count,
+            SUM(amount_receivable) amount
+     FROM receivable_charges
+     GROUP BY 1
+     ORDER BY CASE charge_category WHEN 'Rent' THEN 0 WHEN 'Utilities' THEN 1 ELSE 2 END`
+  ).map((r) => ({
+    category: r.category,
+    count: num(r.count),
+    amount: round(r.amount, 2),
+    drill: "delinquencyCharge_" + r.category,
+  }));
+
   const avgRentPerDoor = round(
     one("SELECT AVG(current_rent) a FROM units WHERE current_rent > 0").a,
     2
@@ -244,6 +264,7 @@ async function buildFinancials() {
     delinquentCount,
     delinquencyRate,
     delinquencyByPolicy,
+    delinquencyByCharge,
     aging: {
       current: round(aging.current, 2),
       thirtyPlus: round(aging.thirty, 2),
@@ -779,6 +800,27 @@ function drillRegistry(range) {
       `SELECT COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') late_fee_policy, property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus
        FROM delinquency
        WHERE amount_receivable > 0 AND COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') = '${policy.replace(/'/g, "''")}'
+       ORDER BY amount_receivable DESC LIMIT ${LIM}`);
+  }
+
+  // One drilldown per charge category (rent vs utilities vs other), showing
+  // the individual unpaid charges behind each tile.
+  const rcCols = [
+    { key: "property_name", label: "Property" },
+    { key: "unit_name", label: "Unit" },
+    { key: "payer_name", label: "Tenant" },
+    { key: "account_name", label: "Charge Type" },
+    { key: "posting_date", label: "Posted" },
+    { key: "amount_receivable", label: "Amount Due", money: true },
+    { key: "thirty_plus", label: "30+", money: true },
+    { key: "ninety_plus", label: "90+", money: true },
+  ];
+  // Drilldowns include credit (negative) rows so the listed charges sum to the
+  // tile's net amount — nothing is hidden.
+  for (const cat of ["Rent", "Utilities", "Other"]) {
+    dd["delinquencyCharge_" + cat] = make(`Delinquent — ${cat === "Other" ? "Other Charges" : cat}`, rcCols,
+      `SELECT property_name, unit_name, payer_name, account_name, posting_date, amount_receivable, thirty_plus, ninety_plus
+       FROM receivable_charges WHERE charge_category = '${cat}' AND amount_receivable != 0
        ORDER BY amount_receivable DESC LIMIT ${LIM}`);
   }
 

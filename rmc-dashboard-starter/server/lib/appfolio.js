@@ -103,6 +103,8 @@ async function fetchAll(endpoint, body = {}) {
 // ── Report helpers ──────────────────────────────────────────────────────────
 
 export const appfolio = {
+  // Generic access for probing/one-off reports
+  raw: (endpoint, body = {}) => fetchAll(endpoint, body),
   // Core property/unit data
   unitDirectory: (body = {}) => fetchAll("unit_directory.json", body),
   propertyDirectory: (body = {}) => fetchAll("property_directory.json", body),
@@ -167,6 +169,7 @@ export const appfolio = {
   // Delinquency
   delinquency: (body = {}) => fetchAll("delinquency.json", body),
   lateFeePolicyComparison: (body = {}) => fetchAll("late_fee_policy_comparison.json", body),
+  agedReceivablesDetail: (body = {}) => fetchAll("aged_receivables_detail.json", body),
   delinquencyAsOf: (asOfDate, body = {}) =>
     fetchAll("delinquency_as_of.json", { occurred_on_to: asOfDate, ...body }),
   agedReceivableDetail: (asOfDate, body = {}) =>

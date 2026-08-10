@@ -538,6 +538,21 @@
             <KpiCard live label="Delinquency Rate" value={fmt.pct(f.delinquencyRate)} tone={f.delinquencyRate <= 3 ? "good" : "bad"} drill="delinquency" />
           </div>
 
+          {/* DELINQUENCY BY CHARGE TYPE (rent vs utilities) */}
+          {(f.delinquencyByCharge || []).length > 0 ? (
+            <>
+              <SectionHeader title="Delinquency by Charge Type"
+                subtitle="Outstanding balances split into rent, utility reimbursements, and other charges" />
+              <div style={gridAuto(200)}>
+                <KpiCard big live label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
+                {f.delinquencyByCharge.map((c) => (
+                  <KpiCard key={c.drill} live label={c.category === "Other" ? "Other Charges" : c.category} value={fmt.money(c.amount)}
+                    sub={c.count + (c.count === 1 ? " account" : " accounts")} drill={c.drill} />
+                ))}
+              </div>
+            </>
+          ) : null}
+
           {/* DELINQUENCY BY LATE FEE POLICY */}
           {(f.delinquencyByPolicy || []).length > 0 ? (
             <>
@@ -877,6 +892,14 @@
               <HBars rows={aging} valueFmt={fmt.money2} height={14} />
             </ChartCard>
           </div>
+          {(f.delinquencyByCharge || []).length > 0 ? (
+            <div style={{ ...gridAuto(200), marginTop: 12 }}>
+              {f.delinquencyByCharge.map((c) => (
+                <KpiCard key={c.drill} live label={"Delinquent — " + (c.category === "Other" ? "Other Charges" : c.category)} value={fmt.money(c.amount)}
+                  sub={c.count + (c.count === 1 ? " account" : " accounts")} drill={c.drill} />
+              ))}
+            </div>
+          ) : null}
           {(f.delinquencyByPolicy || []).length > 0 ? (
             <div style={{ ...gridAuto(200), marginTop: 12 }}>
               {f.delinquencyByPolicy.map((p) => (

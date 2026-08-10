@@ -53,6 +53,23 @@ function migrate() {
       synced_at TEXT
     );
 
+    -- Per-charge receivables (from aged_receivables_detail) — lets delinquency
+    -- be split by charge type (rent vs utilities vs other).
+    CREATE TABLE IF NOT EXISTS receivable_charges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_name TEXT, property_id TEXT,
+      unit_name TEXT, unit_id TEXT,
+      payer_name TEXT, occupancy_id TEXT,
+      account_name TEXT,
+      charge_category TEXT,
+      posting_date TEXT,
+      amount_receivable REAL DEFAULT 0,
+      thirty_plus REAL DEFAULT 0,
+      sixty_plus REAL DEFAULT 0,
+      ninety_plus REAL DEFAULT 0,
+      synced_at TEXT
+    );
+
     -- Renewals (from renewal_summary)
     CREATE TABLE IF NOT EXISTS renewals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
