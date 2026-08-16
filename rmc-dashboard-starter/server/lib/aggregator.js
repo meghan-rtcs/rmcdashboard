@@ -445,9 +445,15 @@ export function computeBillableHours(period) {
     "SELECT tech, SUM(worked_hours) h, COUNT(*) entries FROM labor_entries WHERE work_date >= ? AND work_date <= ? AND tech != '' GROUP BY tech",
     [monthStart, monthEnd]
   );
+  // PTO is still entered manually; "other billable" hours now come from the
+  // approved rows of the shared Google Sheet (replacing in-dashboard entry).
   const adjustments = many(
-    "SELECT tech, pto_hours, extra_hours FROM labor_adjustments WHERE period = ?",
+    "SELECT tech, pto_hours FROM labor_adjustments WHERE period = ?",
     [period]
+  );
+  const sheetHours = many(
+    "SELECT employee, SUM(hours) h FROM sheet_billable_hours WHERE approved_by != '' AND work_date >= ? AND work_date <= ? GROUP BY employee",
+    [monthStart, monthEnd]
   );
   const byTech = new Map();
   for (const r of logged) {
@@ -456,8 +462,14 @@ export function computeBillableHours(period) {
   for (const a of adjustments) {
     const t = byTech.get(a.tech) || { tech: a.tech, logged: 0, entries: 0, pto: 0, extra: 0 };
     t.pto = round(num(a.pto_hours), 2);
-    t.extra = round(num(a.extra_hours), 2);
     byTech.set(a.tech, t);
+  }
+  for (const s of sheetHours) {
+    // Loose name match: sheet uses full names, AppFolio tech names may differ
+    const words = String(s.employee).toLowerCase().replace(/["']/g, "").split(/[\s,]+/).filter((w) => w.length > 2);
+    let t = [...byTech.values()].find((x) => words.some((w) => x.tech.toLowerCase().includes(w)));
+    if (!t) { t = { tech: s.employee, logged: 0, entries: 0, pto: 0, extra: 0 }; byTech.set(s.employee, t); }
+    t.extra = round(t.extra + num(s.h), 2);
   }
   const workdays = workdaysElapsed(period);
   const baseHours = workdays * 8;

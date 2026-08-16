@@ -148,6 +148,30 @@ function migrate() {
       PRIMARY KEY (quarter, employee)
     );
 
+    -- Other billable hours from the shared Google Sheet ("Entry Log" tab).
+    -- Only rows with an Approved By value count toward utilization; all rows
+    -- are stored so the dashboard can show a pending/approved audit view.
+    CREATE TABLE IF NOT EXISTS sheet_billable_hours (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      row_number INTEGER,       -- sheet row (for auditability)
+      work_date TEXT,           -- YYYY-MM-DD
+      employee TEXT,
+      hours REAL DEFAULT 0,
+      description TEXT,
+      property_unit TEXT,
+      approved_by TEXT,
+      approved_date TEXT,
+      quarter TEXT,             -- as written in the sheet, e.g. 'Q3 2026'
+      notes TEXT,
+      synced_at TEXT
+    );
+
+    -- Small key/value store for app state (e.g. sheet sync status)
+    CREATE TABLE IF NOT EXISTS app_state (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
     -- Renewals (from renewal_summary)
     CREATE TABLE IF NOT EXISTS renewals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

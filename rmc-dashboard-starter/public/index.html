@@ -704,7 +704,7 @@
       return (
         <div>
           <SectionHeader title={"Maintenance Billable Hours · " + monthLabel}
-            subtitle={"Denominator: " + bh.workdays + " workdays so far × 8h = " + bh.baseHours + "h per tech, minus PTO. Enter PTO and off-AppFolio billable hours, then save."} />
+            subtitle={"Denominator: " + bh.workdays + " workdays so far × 8h = " + bh.baseHours + "h per tech, minus PTO. Enter PTO here; other billable hours come from the approved rows of the shared Google Sheet."} />
           <div style={gridAuto(200)}>
             <KpiCard big live label="Billable Hours (MTD)" value={fmt.num(bh.totalBillable)} unit="h"
               sub={fmt.num(bh.totalLogged) + "h on work orders + " + fmt.num(bh.totalExtra) + "h projects"} drill="laborEntries" />
@@ -723,7 +723,7 @@
                   <th style={{ ...th, textAlign: "left" }}>Tech</th>
                   <th style={th}>WO Hours</th>
                   <th style={th}>PTO / Sick (h)</th>
-                  <th style={th}>Other Billable (h)</th>
+                  <th style={th}>Other Billable (h, from sheet)</th>
                   <th style={th}>Billable</th>
                   <th style={th}>Available</th>
                   <th style={th}>Utilization</th>
@@ -740,9 +740,8 @@
                       <input type="number" min="0" step="0.5" style={inputStyle}
                         value={val(t.tech, "pto", t.pto)} onChange={(e) => setVal(t.tech, "pto", e.target.value)} />
                     </td>
-                    <td style={td}>
-                      <input type="number" min="0" step="0.5" style={inputStyle}
-                        value={val(t.tech, "extra", t.extra)} onChange={(e) => setVal(t.tech, "extra", e.target.value)} />
+                    <td style={td} title="From the approved rows of the shared Google Sheet — edit there, not here.">
+                      {fmt.num(t.extra)} <span style={{ fontSize: 10, color: C.muted }}>(sheet)</span>
                     </td>
                     <td style={{ ...td, fontWeight: 600 }}>{fmt.num(t.billable)}</td>
                     <td style={td}>{fmt.num(t.available)}</td>
@@ -1121,6 +1120,18 @@
           ) : data.snapshot ? (
             <div style={{ background: C.bg, border: "1px solid " + C.border, borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.muted, marginBottom: 8 }}>
               Current quarter — showing live numbers (a snapshot from {new Date(data.snapshot.at).toLocaleString()} exists and will be used once the quarter closes).
+            </div>
+          ) : null}
+
+          {data.sheetSync ? (
+            <div style={{ background: data.sheetSync.ok ? C.bg : "rgba(176,42,42,0.07)", border: "1px solid " + (data.sheetSync.ok ? C.border : "rgba(176,42,42,0.35)"), borderRadius: 9, padding: "9px 14px", fontSize: 12, color: data.sheetSync.ok ? C.muted : C.red, marginBottom: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {data.sheetSync.ok ? (
+                <span>📋 Other billable hours sheet synced {new Date(data.sheetSync.at).toLocaleString()}
+                  {data.sheetSync.quarterHours ? " — this quarter: " + fmt.num(data.sheetSync.quarterHours.approved) + "h approved (counted)" + (data.sheetSync.quarterHours.pending ? ", " + fmt.num(data.sheetSync.quarterHours.pending) + "h pending approval (not counted)" : "") : ""}</span>
+              ) : (
+                <span>⚠ Google Sheet sync FAILED{data.sheetSync.failedAt ? " " + new Date(data.sheetSync.failedAt).toLocaleString() : ""} ({data.sheetSync.error}) — utilization uses the last successful sheet read{data.sheetSync.at ? " from " + new Date(data.sheetSync.at).toLocaleString() : ""}.</span>
+              )}
+              <button onClick={() => openDrill("team_sheet_hours")} style={{ background: "#fff", border: "1px solid " + C.border, borderRadius: 6, padding: "3px 10px", fontSize: 11.5, fontWeight: 600, color: C.muted, cursor: "pointer" }}>Audit entries</button>
             </div>
           ) : null}
 

@@ -546,6 +546,16 @@ export async function syncAll() {
     console.log(`[sync] Inspections: ${mapped.length} rows`);
   } catch (e) { errors.push(`inspections: ${e.message}`); console.error("[sync]", e.message); }
 
+  // ── 17. Other billable hours (Google Sheet) ─────────────────────────────
+  // Failures are recorded in app_state and shown in the UI; the last good
+  // rows stay in place so utilization doesn't silently drop to AppFolio-only.
+  try {
+    const { syncSheetHours } = await import("./sheets.js");
+    const st = await syncSheetHours();
+    if (st.ok) totalRecords += st.rows;
+    else errors.push(`google_sheet: ${st.error}`);
+  } catch (e) { errors.push(`google_sheet: ${e.message}`); console.error("[sync]", e.message); }
+
   // ── Sync log ────────────────────────────────────────────────────────────
   const duration = Date.now() - start;
   run(`INSERT INTO sync_log (started_at, completed_at, status, records, errors, duration_ms)

@@ -7,6 +7,7 @@
     "sync": "node -e \"import('./server/lib/sync.js').then(m => m.syncAll().then(r => console.log(r)))\""
   },
   "dependencies": {
+    "@replit/connectors-sdk": "^0.4.2",
     "better-sqlite3": "^11.0.0",
     "express": "^4.18.2"
   },

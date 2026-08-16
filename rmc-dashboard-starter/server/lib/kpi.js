@@ -269,9 +269,16 @@ export function computeQuarterUtilization(qs, qe, quarter) {
     "SELECT tech, SUM(worked_hours) h, COUNT(*) entries FROM labor_entries WHERE work_date >= ? AND work_date < ? AND tech != '' GROUP BY tech",
     [qs, qe]
   );
+  // PTO still comes from the manual worksheet; "other billable" hours now
+  // come exclusively from the approved rows of the shared Google Sheet
+  // (replacing direct in-dashboard entry, per spec).
   const adj = many(
-    `SELECT tech, SUM(pto_hours) pto, SUM(extra_hours) extra FROM labor_adjustments WHERE period IN (${months.map(() => "?").join(",")}) GROUP BY tech`,
+    `SELECT tech, SUM(pto_hours) pto FROM labor_adjustments WHERE period IN (${months.map(() => "?").join(",")}) GROUP BY tech`,
     months
+  );
+  const sheet = many(
+    "SELECT employee, SUM(hours) h FROM sheet_billable_hours WHERE approved_by != '' AND work_date >= ? AND work_date < ? GROUP BY employee",
+    [qs, qe]
   );
   const overrides = many("SELECT employee, scheduled_hours FROM team_overrides WHERE quarter = ?", [quarter]);
   const ovMap = new Map(overrides.map((o) => [o.employee.toLowerCase(), num(o.scheduled_hours)]));
@@ -279,8 +286,17 @@ export function computeQuarterUtilization(qs, qe, quarter) {
   for (const r of logged) byTech.set(r.tech, { tech: r.tech, logged: round(num(r.h), 2), entries: num(r.entries), pto: 0, extra: 0 });
   for (const a of adj) {
     const t = byTech.get(a.tech) || { tech: a.tech, logged: 0, entries: 0, pto: 0, extra: 0 };
-    t.pto = round(num(a.pto), 2); t.extra = round(num(a.extra), 2);
+    t.pto = round(num(a.pto), 2);
     byTech.set(a.tech, t);
+  }
+  for (const s of sheet) {
+    // Match sheet employee names to AppFolio tech names on shared name words
+    const t = matchTech([...byTech.values()], s.employee) || (() => {
+      const nt = { tech: s.employee, logged: 0, entries: 0, pto: 0, extra: 0 };
+      byTech.set(s.employee, nt);
+      return nt;
+    })();
+    t.extra = round(t.extra + num(s.h), 2);
   }
   return [...byTech.values()].map((t) => {
     const scheduled = ovMap.has(t.tech.toLowerCase()) && ovMap.get(t.tech.toLowerCase()) > 0
@@ -474,11 +490,25 @@ export function computeTeamQuarter(quarter) {
       earned: round(earned, 2), max: round(max, 2), breakdown };
   });
 
+  // Google Sheet ("other billable hours") sync health + quarter totals for
+  // the audit view — the UI must show failures visibly, never silently.
+  let sheetSync = null;
+  try {
+    const st = one("SELECT value FROM app_state WHERE key = 'sheet_sync'");
+    sheetSync = st.value ? JSON.parse(st.value) : null;
+  } catch { /* table may predate feature */ }
+  const sq = one(
+    `SELECT SUM(CASE WHEN approved_by != '' THEN hours ELSE 0 END) approved,
+            SUM(CASE WHEN approved_by = '' THEN hours ELSE 0 END) pending,
+            COUNT(*) rows FROM sheet_billable_hours WHERE work_date >= ? AND work_date < ?`, [qs, qe]);
+  if (sheetSync) sheetSync.quarterHours = { approved: round(num(sq.approved), 2), pending: round(num(sq.pending), 2), rows: num(sq.rows) };
+
   return {
     quarter, quarterStart: qs, quarterEnd: qe,
     isCurrent: quarter === currentQuarter(),
     computedAt: new Date().toISOString(),
     snapshot: null,
+    sheetSync,
     kpis, departments, employees,
     quarters: listQuarters(),
   };
@@ -601,6 +631,23 @@ export function getTeamDrilldown(key, quarter) {
            WHERE completed_date != '' AND created_date != '' AND completed_date >= created_date
              AND completed_date >= ? AND completed_date < ?
            ORDER BY days DESC LIMIT ${LIM}`, [qs, qe]));
+    case "sheet_hours": {
+      // Audit/reconciliation view: every sheet row in the quarter with its
+      // approval status, so pending vs counted hours are transparent.
+      return mk("Other Billable Hours (Google Sheet)", [
+        { key: "work_date", label: "Date" }, { key: "employee", label: "Employee" },
+        { key: "hours", label: "Hours" }, { key: "description", label: "Project / Description" },
+        { key: "property_unit", label: "Property / Unit" }, { key: "status", label: "Status" },
+        { key: "approved_by", label: "Approved By" }, { key: "approved_date", label: "Approved Date" },
+        { key: "notes", label: "Notes" }],
+        many(
+          `SELECT work_date, employee, hours, description, property_unit,
+                  CASE WHEN approved_by != '' THEN 'Approved (counted)' ELSE 'Pending (not counted)' END status,
+                  approved_by, approved_date, notes
+           FROM sheet_billable_hours
+           WHERE work_date >= ? AND work_date < ?
+           ORDER BY work_date DESC LIMIT ${LIM}`, [qs, qe]));
+    }
     case "mnt_util_bong":
     case "mnt_util_scott": {
       const emp = id === "mnt_util_bong" ? "Bong" : "Scott";
