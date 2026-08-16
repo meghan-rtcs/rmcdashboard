@@ -1,0 +1,179 @@
+# Replit Prompt: RMC Dashboard - KPIs & Bonuses Tab
+
+Paste everything below the line into Replit.
+
+---
+
+## Context
+
+This is the existing RMC property management dashboard (Node/Express + AppFolio API sync). I need to add a new **KPIs & Bonuses** tab that turns AppFolio data into a quarterly performance and bonus scorecard for staff, plus a few supporting data fixes. Do not change existing tabs except where called out in Section 8.
+
+Everyone can see everyone else's KPIs. No per-user permission gating is needed on this tab.
+
+## 1. Core concept
+
+Three departments: **Property Management**, **Maintenance**, **Bookkeeping**.
+
+Each department has 3-4 KPIs. Each KPI has three achievement tiers (**Good / Better / Best**), and each tier pays a dollar amount. Department KPI dollars are earned by the department as a unit and split among its members. Some KPIs are individual instead of departmental.
+
+Quarterly cycle. The tab shows the current quarter in progress plus locked historical quarters.
+
+## 2. Employee roster and department weighting
+
+| Employee | Role | Department allocation |
+|---|---|---|
+| John Fedele | Senior Property Manager | Property Management 100% |
+| Mark Felix | Associate Property Manager | Property Management 100% |
+| Fabian Buenrostro | Maintenance Coordinator | Maintenance 50% / Property Management 50% |
+| Lobrigo "Bong" Manasan | Maintenance Technician | Maintenance (individual KPIs only, see 4.2) |
+| Scott C. Scott | Maintenance Technician | Maintenance (individual KPIs only, see 4.2) |
+| Melinda Greene | Bookkeeper | Bookkeeping 100% |
+
+Department pool split must be **share-weighted, not headcount-equal**: an employee's share of a department's earned dollars = their weight / sum of all weights in that department. Fabian counts as 0.5 in each of his two departments. This roster and the weights must be editable in config, not hardcoded in components, because staff will change.
+
+## 3. Configuration model (important)
+
+All KPI definitions, thresholds, and dollar amounts must live in a single editable config (JSON file or a `kpi_config` DB table, your call - prefer DB with a simple admin edit screen if that isn't a large lift). Nothing about thresholds or payouts should be hardcoded in UI or calculation code.
+
+Each KPI config record needs:
+
+- `id`, `department`, `label`, `description`
+- `scope`: `department` or `individual`
+- `assigned_to`: null for department-scope, employee id for individual
+- `data_source`: which AppFolio report or external source feeds it
+- `direction`: `higher_is_better` or `lower_is_better`
+- `unit`: `percent`, `days`, `count`, `currency`
+- `tiers`: `{ good: {threshold, payout}, better: {threshold, payout}, best: {threshold, payout} }`
+- `active`: boolean, and `effective_quarter` so changing thresholds mid-year doesn't retroactively rewrite closed quarters
+
+Thresholds below are the client's first pass and **will change** before rollout. Build so they can be swapped without a redeploy.
+
+## 4. KPI definitions
+
+### 4.1 Property Management (department scope, split John / Mark / Fabian at 1 / 1 / 0.5)
+
+| KPI | Source | Good | Better | Best |
+|---|---|---|---|---|
+| Vacancy time - days from turnover to re-lease | AppFolio unit vacancy data, excluding non-revenue units (see 8.1) | 30 days or less | 20 days or less | 10 days or less |
+| Owner property insurance info current in AppFolio | AppFolio insurance report (already wired up in a prior change) | 70-80% | 80-90% | Over 90% |
+| Days on market | AppFolio | TBD - build the KPI, leave thresholds null until provided | TBD | TBD |
+| Days to lease | AppFolio | TBD | TBD | TBD |
+
+Note: the client has not finalized the last two PM KPIs. Create them as active-flagged-off config records with null thresholds so they can be turned on later. The UI must render a KPI with null thresholds as "Not yet configured" rather than erroring or scoring it.
+
+### 4.2 Maintenance
+
+Department scope (split Fabian 0.5, plus techs only if the client later opts in - default is that department KPIs are Fabian-only at this point, so the split logic must handle a single-member department correctly):
+
+| KPI | Source | Good | Better | Best |
+|---|---|---|---|---|
+| Clean move-in percentage | AppFolio | 70-80% | 80-90% | Over 90% |
+| Work orders completed within 30 days | AppFolio work order data | 75-85% | 85-95% | Over 95% |
+| Work order time to completion | AppFolio work order status timestamps | TBD | TBD | TBD |
+
+**Individual scope - billable hours utilization.** Bong and Scott are each scored independently on their own utilization percentage. This is not a shared pool and one tech's result must never affect the other's.
+
+| KPI | Good | Better | Best |
+|---|---|---|---|
+| Billable hours percentage | 75-85% | 85-95% | Over 95% |
+
+Utilization formula:
+
+```
+utilization = (appfolio_billable_hours + approved_other_billable_hours)
+              / (scheduled_hours - pto_hours - sick_hours)
+```
+
+PTO and sick hours come **out of the denominator**, they do not count against the tech. Scheduled hours default to 8 hours x workdays in the quarter, and must be overridable per employee per quarter (someone may go part-time or take unpaid time).
+
+### 4.3 Property Management - individual
+
+| KPI | Assigned to | Source | Good | Better | Best |
+|---|---|---|---|---|---|
+| Building inspections completed per quarter (25% of portfolio) | Mark Felix | AppFolio Inspection Detail report | 125-145 units inspected | 146-165 units inspected | 182+ units inspected |
+
+Implementation detail from the client call: inspections of this type are named **"Building Walkthrough"** in AppFolio and are the only inspection type recorded there (move-in/move-out inspections are done in zInspector, so no filtering conflict today - but filter on inspection name anyway, defensively). Pull `inspection date` and `marked done on`, join to the property to get unit count, and credit **units inspected**, not properties inspected. Assignee is not needed for scoring since only Mark performs these, but capture it so the KPI can be reassigned later.
+
+This replaces a manual Google Sheet the client currently maintains. Show a per-property drill-down: property name, unit count, inspection date, quarter credited, and a rolling year-to-date percentage of portfolio inspected.
+
+### 4.4 Bookkeeping (department scope, Melinda 100%)
+
+| KPI | Source | Good | Better | Best |
+|---|---|---|---|---|
+| Delinquent rent - rent only, excluding utility charges | AppFolio delinquency data | TBD | TBD | TBD |
+| Vendor insurance policy current percentage | AppFolio vendor records | TBD | TBD | TBD |
+| Renter's insurance policy tracking percentage | AppFolio | TBD | TBD | TBD |
+
+Critical on delinquency: the calculation must **exclude utility billbacks and count rent charges only**. Utilities are billed on the 20th and tenants routinely pay them with the following month's rent, which is expected behavior and must not register as delinquency. Make the excluded charge types a config list rather than a hardcoded filter.
+
+## 5. Bonus calculation and display
+
+For a given quarter and employee:
+
+```
+earned = sum over department KPIs (tier_payout x employee_share_in_that_department)
+       + sum over individual KPIs assigned to that employee (tier_payout)
+```
+
+Rules:
+
+- If a KPI result falls below the Good threshold, payout is $0 for that KPI.
+- Tier is the highest tier whose threshold is met, respecting `direction`.
+- Thresholds expressed as ranges (e.g. "70-80%") should be stored as the lower bound of the band; the band's upper bound is implied by the next tier.
+- Show both the earned dollars and the maximum possible dollars for the quarter, per employee and per department.
+
+Display requirements:
+
+- **Quarter selector** at the top. Default to the current quarter. Historical quarters render read-only.
+- **Department view**: each department as a card or section, with its KPIs listed showing current actual value, tier achieved (color-coded), tier thresholds visible inline, and dollars earned vs. available.
+- **Employee view**: a row or card per employee showing quarter-to-date earned, maximum possible, and a breakdown of which KPIs contributed. Fabian's card must clearly show his two department contributions separately.
+- Every KPI value should be **clickable to a drill-down** showing the underlying records that produced it (the same pattern used elsewhere in this dashboard). This is the primary way the team will find bad AppFolio data.
+- Flag KPIs where the underlying data looks unreliable - for example, work order KPIs where a large share of work orders are sitting in "New" or "Assigned" status with no further status movement. A visible data-quality warning is more useful here than a silently wrong number.
+
+## 6. Quarter locking / snapshots
+
+At quarter close, snapshot the computed KPI values and bonus amounts to a `quarter_results` table. Historical quarters must read from the snapshot, not recompute live. AppFolio records get edited retroactively and a bonus that has already been paid and discussed with staff cannot change afterward.
+
+Include an admin action to re-snapshot a specific quarter, in case a correction is needed before payout, with a timestamp of when the snapshot was taken shown on historical views.
+
+## 7. Other Billable Hours - Google Sheet integration
+
+Today "other billable" can be entered directly in the dashboard, which is a loophole: a tech short on utilization can add hours and self-approve. Replace it.
+
+- Remove or disable direct in-dashboard entry of other billable hours.
+- Read other billable hours from a Google Sheet (service-account read access, sheet ID in env config).
+- Expected columns: `Date`, `Employee`, `Start Time`, `End Time`, `Hours`, `Project / Description`, `Approved By`, `Approved Date`.
+- Only rows with a populated `Approved By` count toward the utilization numerator.
+- Add an **audit view** on the KPI tab: filter by employee and quarter, showing AppFolio Work Order Labor Summary hours and approved other-billable hours side by side with a combined total, so the owner can reconcile the two sources before signing off on a bonus.
+- Show the sheet's last successful sync timestamp, and surface sync failures visibly rather than silently serving stale data.
+
+## 8. Supporting data fixes
+
+### 8.1 Non-revenue units
+
+AppFolio counts every vacant day against days-vacant, including units that are non-revenue (under renovation, owner-occupied, parking spaces, units tied up in eviction). This is currently making average days vacant meaningless - one card shows 486 days average, driven by parking spaces sitting at 1,700+ days.
+
+- Exclude units flagged non-revenue in AppFolio from all vacancy, days-vacant, days-on-market, and occupancy calculations.
+- Add a **Non-Revenue Units card** listing every currently non-revenue unit with the property, unit, non-revenue reason, and date the flag was set. AppFolio has no report for this and the flag must be cleared manually, so this list is the only way to catch units that were flagged and then forgotten. Include a "days flagged" column and highlight anything past, say, 90 days.
+- Confirm whether the non-revenue flag and reason are exposed in the API before building the card. If they are not available, say so rather than faking it, and I will find another route.
+
+### 8.2 Operations tab
+
+There is an outstanding bug on the Operations tab discussed on the call. [Meg - drop the specific description in here before sending.]
+
+## 9. Out of scope for now
+
+- Company-wide 5-star review incentive (Opiniion) - may be added later as a manual quarterly input plus a flat bonus trigger. Leave room in the data model for a company-level bonus component but do not build the UI yet.
+- Any change to how PTO accrual is tracked. Payroll remains the system of record; the dashboard only needs PTO hours to adjust the utilization denominator.
+
+## 10. Deliverables
+
+1. New KPIs & Bonuses tab with department, employee, and quarter views.
+2. Config-driven KPI definitions with editable thresholds and payouts.
+3. Bonus calculation engine with share-weighted department splits and individual KPIs.
+4. Quarter snapshot/locking.
+5. Google Sheet other-billable integration plus reconciliation audit view.
+6. Non-revenue unit exclusion and Non-Revenue Units card.
+7. Drill-downs on every KPI value.
+
+Ask me before making assumptions about any threshold marked TBD. Build those KPIs with null thresholds and a clear "not configured" state instead of guessing values.
