@@ -811,6 +811,11 @@
             <KpiCard live label="No Policy on File" value={fmt.num(ins.owners.missing)} tone={ins.owners.missing ? "warn" : "good"} drill="ownerInsMissing" />
             <KpiCard live label="Policies Tracked" value={fmt.num(ins.owners.tracked)} drill="ownerInsAll" />
           </div>
+
+          <SectionHeader title="Non-Revenue Units" subtitle="Units marked not rentable in AppFolio (parking, storage, etc.) — excluded from occupancy & vacancy metrics. AppFolio's API doesn't expose a flag date, so time-flagged tracking isn't available." />
+          <div style={gridAuto(200)}>
+            <KpiCard live label="Non-Revenue Units" value={fmt.num((d.occupancy || {}).nonRevenueUnits)} tone="info" drill="nonRevenueUnits" />
+          </div>
         </div>
       );
     }
@@ -911,6 +916,276 @@
       );
     }
 
+    // ── Team Performance (KPIs & Bonuses) ────────────────────────────────────
+    const TIER_META = {
+      best: { label: "Best", color: C.gold, bg: "rgba(224,160,40,0.12)" },
+      better: { label: "Better", color: C.blue, bg: "rgba(46,110,180,0.10)" },
+      good: { label: "Good", color: C.green, bg: "rgba(45,140,62,0.10)" },
+      none: { label: "Below Good", color: C.red, bg: "rgba(196,58,48,0.08)" },
+    };
+    function fmtKpiValue(v, unit) {
+      if (v == null) return "—";
+      if (unit === "percent") return fmt.pct(v);
+      if (unit === "currency") return fmt.money(v);
+      if (unit === "days") return fmt.num(v) + " days";
+      return fmt.num(v);
+    }
+    function TierBadge({ tier, configured, active }) {
+      if (!active) return <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, background: C.bg, border: "1px solid " + C.border, borderRadius: 5, padding: "2px 7px" }}>Inactive</span>;
+      if (!configured) return <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, background: C.bg, border: "1px dashed " + C.border, borderRadius: 5, padding: "2px 7px" }}>Not yet configured</span>;
+      const m = TIER_META[tier];
+      if (!m) return <span style={{ fontSize: 10, color: C.muted }}>—</span>;
+      return <span style={{ fontSize: 10, fontWeight: 800, color: m.color, background: m.bg, border: "1px solid " + m.color + "44", borderRadius: 5, padding: "2px 7px", textTransform: "uppercase", letterSpacing: "0.05em" }}>{m.label}</span>;
+    }
+    function tiersText(k) {
+      const seg = (name, t) => t && t.threshold != null
+        ? name + " " + (k.direction === "lower_is_better" ? "≤ " : "≥ ") + fmtKpiValue(t.threshold, k.unit) + (t.payout ? " → " + fmt.money(t.payout) : "")
+        : null;
+      return ["good", "better", "best"].map((n) => seg(n[0].toUpperCase() + n.slice(1), k.tiers[n])).filter(Boolean).join(" · ") || "Thresholds not set";
+    }
+
+    function KpiRow({ k, onDrill }) {
+      const [hover, setHover] = useState(false);
+      const clickable = !!k.drill;
+      return (
+        <div onClick={clickable ? () => onDrill(k.drill) : undefined}
+          onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+          style={{ display: "flex", alignItems: "center", gap: 14, padding: "11px 16px", borderBottom: "1px solid " + C.grid, cursor: clickable ? "pointer" : "default", background: hover && clickable ? "#FCF9F2" : "transparent", opacity: k.active ? 1 : 0.55 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.black, display: "flex", alignItems: "center", gap: 8 }}>
+              {k.label}
+              {k.assignedName ? <span style={{ fontSize: 10, color: C.muted, fontWeight: 600, background: C.bg, borderRadius: 4, padding: "1px 6px" }}>{k.assignedName.split(" ")[0]}</span> : null}
+            </div>
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 2 }}>{tiersText(k)}</div>
+            {k.detail ? <div style={{ fontSize: 10.5, color: "#B8AF9C", marginTop: 1 }}>{k.detail}</div> : null}
+            {k.dataQuality ? <div style={{ fontSize: 10.5, color: C.amber, marginTop: 2 }}>⚠ {k.dataQuality}</div> : null}
+          </div>
+          <div style={{ textAlign: "right", minWidth: 86 }}>
+            <div style={{ fontSize: 19, fontWeight: 300, color: C.black, fontVariantNumeric: "tabular-nums" }}>{k.active ? fmtKpiValue(k.value, k.unit) : "—"}</div>
+          </div>
+          <div style={{ minWidth: 108, textAlign: "center" }}><TierBadge tier={k.tier} configured={k.configured} active={k.active} /></div>
+          <div style={{ textAlign: "right", minWidth: 92 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: k.payout ? C.green : C.muted, fontVariantNumeric: "tabular-nums" }}>{fmt.money(k.payout)}</div>
+            <div style={{ fontSize: 9.5, color: "#B8AF9C" }}>of {fmt.money(k.maxPayout)} max</div>
+          </div>
+          {clickable && <span style={{ fontSize: 13, color: hover ? C.gold : "#CFC6B2" }}>›</span>}
+        </div>
+      );
+    }
+
+    function KpiConfigModal({ quarter, onClose, onSaved }) {
+      const [cfg, setCfg] = useState(null);
+      const [saving, setSaving] = useState(false);
+      const [err, setErr] = useState(null);
+      const [ovEmployee, setOvEmployee] = useState("");
+      const [ovHours, setOvHours] = useState("");
+      useEffect(() => {
+        fetch("/api/team/config").then((r) => r.json()).then(setCfg).catch((e) => setErr(e.message));
+      }, []);
+      const setTier = (id, tierName, field, val) => {
+        setCfg((c) => ({ ...c, configs: c.configs.map((k) => k.id === id
+          ? { ...k, tiers: { ...k.tiers, [tierName]: { ...(k.tiers[tierName] || {}), [field]: val } } } : k) }));
+      };
+      const setActive = (id, val) => setCfg((c) => ({ ...c, configs: c.configs.map((k) => k.id === id ? { ...k, active: val ? 1 : 0 } : k) }));
+      const save = async () => {
+        setSaving(true); setErr(null);
+        try {
+          for (const k of cfg.configs) {
+            const res = await fetch("/api/team/config", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: k.id, tiers: k.tiers, active: !!k.active }) });
+            if (!res.ok) throw new Error((await res.json()).error || "Save failed for " + k.label);
+          }
+          if (ovEmployee.trim() && ovHours !== "") {
+            const res = await fetch("/api/team/override", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ quarter, employee: ovEmployee.trim(), scheduled_hours: Number(ovHours) }) });
+            if (!res.ok) throw new Error((await res.json()).error || "Override save failed");
+          }
+          onSaved();
+        } catch (e) { setErr(e.message); setSaving(false); }
+      };
+      const inp = { width: 74, padding: "4px 6px", border: "1px solid " + C.border, borderRadius: 6, fontSize: 12, background: "#fff" };
+      return (
+        <Modal title="KPI Configuration (thresholds, payouts & activation)" onClose={onClose}>
+          {!cfg ? <div style={{ padding: 40, textAlign: "center", color: C.muted }}>Loading…</div> : (
+            <div style={{ padding: "14px 22px 22px" }}>
+              <p style={{ fontSize: 11.5, color: C.muted, marginBottom: 12 }}>Thresholds are the lower bound of each tier ("Good 125–145" is stored as 125, since Better starts at 146). Leave a threshold blank for "not yet configured". Payouts are dollar amounts per KPI per quarter.</p>
+              {cfg.configs.map((k) => (
+                <div key={k.id} style={{ border: "1px solid " + C.border, borderRadius: 9, padding: "10px 14px", marginBottom: 10, opacity: k.active ? 1 : 0.6 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                    <div>
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: C.black }}>{k.label}</span>
+                      <span style={{ fontSize: 10.5, color: C.muted, marginLeft: 8 }}>{k.department} · {k.direction === "lower_is_better" ? "lower is better" : "higher is better"} · {k.unit}</span>
+                    </div>
+                    <label style={{ fontSize: 11, color: C.muted, display: "flex", alignItems: "center", gap: 5 }}>
+                      <input type="checkbox" checked={!!k.active} onChange={(e) => setActive(k.id, e.target.checked)} /> Active
+                    </label>
+                  </div>
+                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                    {["good", "better", "best"].map((tn) => (
+                      <div key={tn} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "capitalize", width: 40 }}>{tn}</span>
+                        <input style={inp} placeholder="threshold" value={k.tiers[tn] && k.tiers[tn].threshold != null ? k.tiers[tn].threshold : ""}
+                          onChange={(e) => setTier(k.id, tn, "threshold", e.target.value === "" ? null : e.target.value)} />
+                        <span style={{ fontSize: 11, color: "#B8AF9C" }}>$</span>
+                        <input style={inp} placeholder="payout" value={k.tiers[tn] && k.tiers[tn].payout != null ? k.tiers[tn].payout : ""}
+                          onChange={(e) => setTier(k.id, tn, "payout", e.target.value)} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <div style={{ border: "1px solid " + C.border, borderRadius: 9, padding: "10px 14px", marginTop: 4 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.black, marginBottom: 6 }}>Scheduled-hours override · {quarter}</div>
+                <p style={{ fontSize: 10.5, color: C.muted, marginBottom: 8 }}>Default scheduled hours = 8h × elapsed weekdays in the quarter. Override for part-time schedules etc. — enter the tech's name exactly as it appears in labor entries (e.g. "Bong"), 0 clears the override.</p>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={{ ...inp, width: 160 }} placeholder="Employee name" value={ovEmployee} onChange={(e) => setOvEmployee(e.target.value)} />
+                  <input style={{ ...inp, width: 110 }} placeholder="Scheduled hours" value={ovHours} onChange={(e) => setOvHours(e.target.value)} />
+                </div>
+              </div>
+              {err ? <p style={{ color: C.red, fontSize: 12, marginTop: 10 }}>{err}</p> : null}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+                <button onClick={onClose} style={{ background: C.bg, border: "1px solid " + C.border, borderRadius: 8, padding: "8px 16px", fontSize: 13, color: C.muted }}>Cancel</button>
+                <button onClick={save} disabled={saving} style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, fontSize: 13, opacity: saving ? 0.6 : 1 }}>{saving ? "Saving…" : "Save Configuration"}</button>
+              </div>
+            </div>
+          )}
+        </Modal>
+      );
+    }
+
+    function TeamTab() {
+      const [quarter, setQuarter] = useState(null); // null = current
+      const [data, setData] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [drill, setDrill] = useState(null);
+      const [drillData, setDrillData] = useState(null);
+      const [showConfig, setShowConfig] = useState(false);
+      const [snapping, setSnapping] = useState(false);
+      const [openEmp, setOpenEmp] = useState(null);
+
+      const load = (q) => {
+        setLoading(true);
+        fetch("/api/team" + (q ? "?quarter=" + encodeURIComponent(q) : ""))
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then((j) => { setData(j); setError(null); })
+          .catch((e) => setError(e.message))
+          .finally(() => setLoading(false));
+      };
+      useEffect(() => load(quarter), [quarter]);
+
+      const openDrill = (key) => {
+        setDrill(key); setDrillData(null);
+        fetch("/api/team/drilldown/" + encodeURIComponent(key) + "?quarter=" + encodeURIComponent(data.quarter))
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then(setDrillData)
+          .catch(() => setDrillData({ title: "Could not load records", cols: [], rows: [] }));
+      };
+
+      const snapshot = () => {
+        if (!window.confirm("Snapshot " + data.quarter + "? This locks the numbers shown for this quarter (an existing snapshot will be replaced with a new timestamp).")) return;
+        setSnapping(true);
+        fetch("/api/team/snapshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quarter: data.quarter }) })
+          .then((r) => r.json()).then(() => load(quarter)).finally(() => setSnapping(false));
+      };
+
+      if (loading) return <div style={{ padding: 80, textAlign: "center", color: C.muted }}>Loading team performance…</div>;
+      if (error || !data) return <div style={{ marginTop: 24, padding: 18, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.red, borderRadius: 10 }}><p style={{ color: C.red, fontSize: 13 }}>{error || "No data"}</p></div>;
+
+      const totalEarned = data.employees.reduce((s, e) => s + e.earned, 0);
+      const totalMax = data.employees.reduce((s, e) => s + e.max, 0);
+
+      return (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, margin: "18px 0 6px" }}>
+            <div style={{ display: "inline-flex", background: C.bg, border: "1px solid " + C.border, borderRadius: 8, padding: 2, flexWrap: "wrap" }}>
+              {data.quarters.map((q) => (
+                <button key={q} onClick={() => setQuarter(q)}
+                  style={{ background: data.quarter === q ? C.gold : "transparent", color: data.quarter === q ? "#fff" : C.muted, border: "none", borderRadius: 6, padding: "5px 11px", fontSize: 12, fontWeight: data.quarter === q ? 600 : 500, cursor: "pointer" }}>{q}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowConfig(true)} style={{ background: "#fff", border: "1px solid " + C.border, borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, color: C.muted }}>⚙ Configure KPIs</button>
+              <button onClick={snapshot} disabled={snapping} style={{ background: C.black, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, opacity: snapping ? 0.6 : 1 }}>{snapping ? "Locking…" : data.snapshot && data.snapshot.locked ? "Re-snapshot Quarter" : "Snapshot & Lock Quarter"}</button>
+            </div>
+          </div>
+
+          {data.snapshot && data.snapshot.locked ? (
+            <div style={{ background: "rgba(45,140,62,0.07)", border: "1px solid rgba(45,140,62,0.3)", borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.green, marginBottom: 8 }}>
+              🔒 Locked snapshot taken {new Date(data.snapshot.at).toLocaleString()} — these numbers will not change even if AppFolio data is edited retroactively.
+            </div>
+          ) : data.notLocked ? (
+            <div style={{ background: "rgba(216,146,26,0.07)", border: "1px solid rgba(216,146,26,0.35)", borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.amber, marginBottom: 8 }}>
+              ⚠ This past quarter has never been snapshotted — numbers shown are computed live from current data and may differ from what was true at quarter end. Use "Snapshot & Lock Quarter" to freeze them.
+            </div>
+          ) : data.snapshot ? (
+            <div style={{ background: C.bg, border: "1px solid " + C.border, borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.muted, marginBottom: 8 }}>
+              Current quarter — showing live numbers (a snapshot from {new Date(data.snapshot.at).toLocaleString()} exists and will be used once the quarter closes).
+            </div>
+          ) : null}
+
+          <div style={gridAuto(200)}>
+            <KpiCard label="Total Bonuses Earned" value={fmt.money(totalEarned)} tone="good" sub={data.quarter} big />
+            <KpiCard label="Max Possible" value={fmt.money(totalMax)} sub="If every KPI hit Best" big />
+            <KpiCard label="Quarter Window" value={data.quarterStart.slice(5) + " → " + data.quarterEnd.slice(5)} sub={data.isCurrent ? "In progress — metrics reflect quarter-to-date" : "Closed"} big />
+          </div>
+
+          {data.departments.map((d) => (
+            <div key={d.department}>
+              <SectionHeader title={d.department}
+                subtitle={(d.members.length ? "Pool split: " + d.members.map((m) => m.name.split(" ")[0] + " " + Math.round(m.share * 100) + "%").join(" · ") : "No pooled members — individual KPIs only") + " · Department earned " + fmt.money(d.earned) + " of " + fmt.money(d.max)} />
+              <div style={{ background: C.card, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
+                {d.kpis.map((k) => <KpiRow key={k.id} k={k} onDrill={openDrill} />)}
+                {d.individualKpis.length ? (
+                  <div style={{ padding: "7px 16px 3px", fontSize: 9.5, fontWeight: 800, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", background: "#FAF7F0", borderBottom: "1px solid " + C.grid }}>Individual KPIs (not pooled)</div>
+                ) : null}
+                {d.individualKpis.map((k) => <KpiRow key={k.id} k={k} onDrill={openDrill} />)}
+              </div>
+            </div>
+          ))}
+
+          <SectionHeader title="Bonuses by Employee" subtitle="Department KPI payouts split by share weight · individual KPIs paid in full to the assignee · click a row for the breakdown" />
+          <div style={{ background: C.card, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
+            {data.employees.map((e) => (
+              <div key={e.id}>
+                <div onClick={() => setOpenEmp(openEmp === e.id ? null : e.id)}
+                  style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderBottom: "1px solid " + C.grid, cursor: "pointer" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: C.black }}>{e.name}</div>
+                    <div style={{ fontSize: 10.5, color: C.muted }}>{e.role}{Object.keys(e.allocations).length ? " · " + Object.entries(e.allocations).map(([d, w]) => Math.round(w * 100) + "% " + d).join(", ") : " · Individual KPIs only"}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 17, fontWeight: 600, color: e.earned ? C.green : C.muted, fontVariantNumeric: "tabular-nums" }}>{fmt.money(e.earned)}</div>
+                    <div style={{ fontSize: 9.5, color: "#B8AF9C" }}>of {fmt.money(e.max)} max</div>
+                  </div>
+                  <span style={{ fontSize: 12, color: "#CFC6B2", transform: openEmp === e.id ? "rotate(90deg)" : "none", transition: "transform .15s" }}>›</span>
+                </div>
+                {openEmp === e.id ? (
+                  <div style={{ background: "#FCFAF6", borderBottom: "1px solid " + C.grid, padding: "6px 16px 10px" }}>
+                    {e.breakdown.length === 0 ? <div style={{ fontSize: 11.5, color: C.muted, padding: "6px 0" }}>No KPIs apply to this employee yet.</div> :
+                      e.breakdown.map((b, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11.5, padding: "4px 0", color: C.muted }}>
+                          <span style={{ flex: 1 }}>{b.kpi} <span style={{ color: "#B8AF9C" }}>({b.type === "individual" ? "individual" : b.department + " · " + Math.round(b.share * 100) + "% share"})</span></span>
+                          <TierBadge tier={b.tier} configured={b.tier != null} active={true} />
+                          <span style={{ width: 90, textAlign: "right", fontWeight: 600, color: b.payout ? C.green : C.muted, fontVariantNumeric: "tabular-nums" }}>{fmt.money(b.payout)}</span>
+                        </div>
+                      ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+
+          {drill ? (
+            <Modal title={drillData ? drillData.title : "Loading…"} onClose={() => { setDrill(null); setDrillData(null); }}>
+              {!drillData ? <div style={{ padding: 48, textAlign: "center", color: C.muted, fontSize: 13 }}>Loading records…</div> : <DrillTable drill={drillData} />}
+            </Modal>
+          ) : null}
+          {showConfig ? <KpiConfigModal quarter={data.quarter} onClose={() => setShowConfig(false)} onSaved={() => { setShowConfig(false); load(quarter); }} /> : null}
+        </div>
+      );
+    }
+
     function App() {
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
@@ -946,6 +1221,7 @@
         { id: "dashboard", label: "Dashboard" },
         { id: "leasing", label: "Leasing & Marketing" },
         { id: "operations", label: "Operations" },
+        { id: "team", label: "Team Performance" },
         { id: "ceo", label: "CEO View" },
       ];
       const rangeOptions = [
@@ -1024,6 +1300,7 @@
                   {tab === "dashboard" && <DashboardTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "leasing" && <LeasingTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "operations" && <OperationsTab d={data.dashboard} rangeLabel={rangeLabel} />}
+                  {tab === "team" && <TeamTab />}
                   {tab === "ceo" && <CeoTab d={data.dashboard} />}
                   {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
                     <div style={{ marginTop: 20, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.amber, borderRadius: 10, padding: 18 }}>

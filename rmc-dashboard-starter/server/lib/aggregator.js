@@ -91,27 +91,35 @@ function policySlug(label) {
 
 // ── Sections ──────────────────────────────────────────────────────────────
 
+// Non-revenue units (unit directory `rentable` = No — the closest thing the
+// AppFolio API exposes to a non-revenue flag) are excluded from occupancy and
+// vacancy metrics so they don't drag the numbers down.
+const REVENUE_UNIT = "COALESCE(rentable,'') != 'No'";
+
 function buildOccupancy() {
-  const totalUnits = num(one("SELECT COUNT(*) c FROM units").c);
+  const totalUnits = num(one(`SELECT COUNT(*) c FROM units WHERE ${REVENUE_UNIT}`).c);
   const occupied = num(
     one(
-      "SELECT COUNT(*) c FROM units WHERE occupancy_status IN ('Occupied','Current') OR (tenant_name IS NOT NULL AND tenant_name != '')"
+      `SELECT COUNT(*) c FROM units WHERE ${REVENUE_UNIT} AND (occupancy_status IN ('Occupied','Current') OR (tenant_name IS NOT NULL AND tenant_name != ''))`
     ).c
   );
   const vacant = Math.max(totalUnits - occupied, 0);
   const vacantNotRented = num(
     one(
-      "SELECT COUNT(*) c FROM units WHERE occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Unrented%'"
+      `SELECT COUNT(*) c FROM units WHERE ${REVENUE_UNIT} AND occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Unrented%'`
     ).c
   );
   const vacantRented = num(
     one(
-      "SELECT COUNT(*) c FROM units WHERE occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Rented%' AND occupancy_status NOT LIKE '%Unrented%'"
+      `SELECT COUNT(*) c FROM units WHERE ${REVENUE_UNIT} AND occupancy_status LIKE '%Vacant%' AND occupancy_status LIKE '%Rented%' AND occupancy_status NOT LIKE '%Unrented%'`
     ).c
   );
   const avgDaysVacant = round(
-    one("SELECT AVG(days_vacant) a FROM vacancies WHERE days_vacant > 0").a
+    one(`SELECT AVG(v.days_vacant) a FROM vacancies v
+         LEFT JOIN units u ON u.id = v.unit_id
+         WHERE v.days_vacant > 0 AND COALESCE(u.rentable,'') != 'No'`).a
   );
+  const nonRevenueUnits = num(one("SELECT COUNT(*) c FROM units WHERE rentable = 'No'").c);
   const properties = num(one("SELECT COUNT(*) c FROM properties").c);
   const owners = num(one("SELECT COUNT(*) c FROM owners").c);
   const rate = totalUnits ? round((occupied / totalUnits) * 100) : 0;
@@ -124,6 +132,7 @@ function buildOccupancy() {
     vacantNotRented,
     vacantRented,
     avgDaysVacant,
+    nonRevenueUnits,
     properties,
     owners,
   };
@@ -981,6 +990,19 @@ function drillRegistry(range) {
          AND instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
                    ',' || lower(trim(p.property_name)) || ',') > 0
      ) ORDER BY property_name LIMIT ${LIM}`);
+
+  // Non-revenue units (rentable = No in the unit directory). AppFolio's API
+  // exposes no non-revenue "reason" or flag date, so tags are the best
+  // available explanation and days-flagged is not available.
+  dd.nonRevenueUnits = make("Non-Revenue Units (excluded from occupancy/vacancy metrics)", [
+    { key: "property_name", label: "Property" },
+    { key: "unit_name", label: "Unit" },
+    { key: "tags", label: "Tags (best-available reason)" },
+    { key: "occupancy_status", label: "Status" },
+    { key: "tenant_name", label: "Tenant" },
+  ],
+    `SELECT property_name, unit_name, COALESCE(NULLIF(tags,''),'—') tags, occupancy_status, tenant_name
+     FROM units WHERE rentable = 'No' ORDER BY property_name, unit_name LIMIT ${LIM}`);
 
   dd.owners = make("Owners", [
     { key: "owner_name", label: "Owner" },

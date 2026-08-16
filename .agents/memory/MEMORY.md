@@ -1,2 +1,3 @@
 - [AppFolio report names](appfolio-report-names.md) — verified report endpoints and their actual field keys; trust this over guessing API names.
 - [Operations metric definitions](operations-metric-definitions.md) — user-approved formulas for utilization, clean move-ins, insurance windows; confirm before changing.
+- [Team Performance KPIs](team-performance-kpis.md) — quarter locking, point-in-time KPI rules, non-revenue units via rentable=No, payouts seeded $0, deferred scope.

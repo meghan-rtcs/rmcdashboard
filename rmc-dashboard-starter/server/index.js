@@ -193,6 +193,120 @@ app.post("/api/labor-adjustments", async (req, res) => {
   }
 });
 
+// ── API: Team Performance (KPIs & Bonuses) ─────────────────────────────────
+app.get("/api/team", async (req, res) => {
+  try {
+    const { getTeamQuarter } = await import("./lib/kpi.js");
+    res.json(getTeamQuarter(String(req.query.quarter || "")));
+  } catch (err) {
+    console.error("[api] Team error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/team/drilldown/:key", async (req, res) => {
+  try {
+    const { getTeamDrilldown } = await import("./lib/kpi.js");
+    const dd = getTeamDrilldown(req.params.key, String(req.query.quarter || ""));
+    if (!dd) return res.status(404).json({ error: "Unknown drilldown: " + req.params.key });
+    res.json(dd);
+  } catch (err) {
+    console.error("[api] Team drilldown error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Snapshot (lock) a quarter's results so retroactive AppFolio edits can't
+// change already-paid bonuses. Re-snapshotting overwrites with a new timestamp.
+app.post("/api/team/snapshot", async (req, res) => {
+  try {
+    const { snapshotQuarter } = await import("./lib/kpi.js");
+    const quarter = String((req.body && req.body.quarter) || "");
+    if (!/^\d{4}-Q[1-4]$/.test(quarter)) return res.status(400).json({ error: "quarter must be YYYY-QN" });
+    res.json(snapshotQuarter(quarter));
+  } catch (err) {
+    console.error("[api] Snapshot error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// KPI config editor (thresholds, payouts, active flags)
+app.get("/api/team/config", async (req, res) => {
+  try {
+    const { seedKpiConfig } = await import("./lib/kpi.js");
+    seedKpiConfig();
+    const configs = query("SELECT * FROM kpi_config ORDER BY department, sort").map((c) => ({ ...c, tiers: JSON.parse(c.tiers || "{}") }));
+    const roster = query("SELECT * FROM kpi_roster ORDER BY sort").map((r) => ({ ...r, allocations: JSON.parse(r.allocations || "{}") }));
+    res.json({ configs, roster });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/team/config", async (req, res) => {
+  try {
+    const { id, tiers, active } = req.body || {};
+    if (!id || typeof id !== "string") return res.status(400).json({ error: "id required" });
+    const { run, queryOne } = await import("./lib/db.js");
+    const existing = queryOne("SELECT id, direction FROM kpi_config WHERE id = ?", [id]);
+    if (!existing) return res.status(404).json({ error: "Unknown KPI: " + id });
+    if (tiers != null) {
+      for (const t of ["good", "better", "best"]) {
+        const tier = tiers[t] || {};
+        if (tier.threshold != null && tier.threshold !== "" && !Number.isFinite(Number(tier.threshold)))
+          return res.status(400).json({ error: t + " threshold must be a number or empty" });
+        if (!Number.isFinite(Number(tier.payout || 0)) || Number(tier.payout || 0) < 0)
+          return res.status(400).json({ error: t + " payout must be a non-negative number" });
+      }
+      const clean = {};
+      for (const t of ["good", "better", "best"]) {
+        const tier = tiers[t] || {};
+        clean[t] = { threshold: tier.threshold == null || tier.threshold === "" ? null : Number(tier.threshold),
+                     payout: Number(tier.payout || 0) };
+      }
+      // Semantic validation: thresholds must get progressively stricter
+      // (Good → Better → Best) in the KPI's direction, and payouts must not
+      // decrease as the tier improves — otherwise scoring becomes arbitrary.
+      const lower = existing.direction === "lower_is_better";
+      const seq = ["good", "better", "best"].map((t) => clean[t]);
+      for (let i = 1; i < seq.length; i++) {
+        const prev = seq.slice(0, i).reverse().find((s) => s.threshold != null);
+        if (prev && seq[i].threshold != null) {
+          const ok = lower ? seq[i].threshold < prev.threshold : seq[i].threshold > prev.threshold;
+          if (!ok) return res.status(400).json({ error: "Thresholds must get progressively " + (lower ? "lower" : "higher") + " from Good to Best" });
+        }
+        const prevP = seq.slice(0, i).reverse().find((s) => s.threshold != null);
+        if (prevP && seq[i].threshold != null && seq[i].payout < prevP.payout)
+          return res.status(400).json({ error: "A better tier cannot pay less than a lower tier" });
+      }
+      run("UPDATE kpi_config SET tiers = ? WHERE id = ?", [JSON.stringify(clean), id]);
+    }
+    if (active != null) run("UPDATE kpi_config SET active = ? WHERE id = ?", [active ? 1 : 0, id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-employee per-quarter scheduled-hours override (utilization denominator)
+app.post("/api/team/override", async (req, res) => {
+  try {
+    const { quarter, employee, scheduled_hours } = req.body || {};
+    if (!/^\d{4}-Q[1-4]$/.test(String(quarter || ""))) return res.status(400).json({ error: "quarter must be YYYY-QN" });
+    if (!employee || typeof employee !== "string") return res.status(400).json({ error: "employee required" });
+    const h = Number(scheduled_hours);
+    if (!Number.isFinite(h) || h < 0 || h > 744) return res.status(400).json({ error: "scheduled_hours must be 0–744" });
+    const { run } = await import("./lib/db.js");
+    if (h === 0) run("DELETE FROM team_overrides WHERE quarter = ? AND employee = ?", [quarter, employee.trim()]);
+    else run(`INSERT INTO team_overrides (quarter, employee, scheduled_hours) VALUES (?, ?, ?)
+              ON CONFLICT(quarter, employee) DO UPDATE SET scheduled_hours = excluded.scheduled_hours`,
+      [quarter, employee.trim(), h]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Single-flight sync guard (shared by manual + scheduled triggers) ───────
 let syncPromise = null;
 function runSync() {

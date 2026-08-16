@@ -52,6 +52,38 @@ export async function syncAll() {
     console.log(`[sync] Rent roll: ${mapped.length} units`);
   } catch (e) { errors.push(`rent_roll: ${e.message}`); console.error("[sync]", e.message); }
 
+  // ── 1b. Unit directory overlay: rentable flag + tags ─────────────────────
+  // rent_roll has no non-revenue indicator; unit_directory's `rentable` field
+  // (Yes/No) is the closest thing AppFolio exposes. Tags help explain why
+  // (e.g. PKG = parking). Used to exclude non-revenue units from vacancy math.
+  try {
+    const rows = await appfolio.unitDirectory();
+    const dbi = getDb();
+    const upd = dbi.prepare("UPDATE units SET rentable = ?, tags = COALESCE(NULLIF(?, ''), tags) WHERE id = ?");
+    // Non-revenue units often don't appear on the rent roll at all, so insert
+    // any directory-only units (they're excluded from occupancy math anyway,
+    // but must exist for the Non-Revenue Units card/drilldown).
+    const ins = dbi.prepare(
+      `INSERT OR IGNORE INTO units (id, property_name, property_id, unit_name, address, city, state, zip,
+        market_rent, rent_status, occupancy_status, tags, rentable, synced_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`);
+    let n = 0, added = 0;
+    for (const r of rows) {
+      if (!r.unit_id) continue;
+      const id = String(r.unit_id);
+      const info = upd.run(r.rentable || "", r.unit_tags || "", id);
+      if (info.changes === 0) {
+        ins.run(id, r.property_name || "", r.property_id ? String(r.property_id) : "",
+          r.unit_name || "", r.unit_address || "", r.unit_city || "", r.unit_state || "", r.unit_zip || "",
+          r.market_rent ? parseFloat(r.market_rent) : null, r.rent_status || "",
+          r.unit_tags || "", r.rentable || "", synced_at);
+        added++;
+      }
+      n++;
+    }
+    console.log(`[sync] Unit directory overlay: ${n} units (rentable/tags), ${added} directory-only units added`);
+  } catch (e) { errors.push(`unit_directory: ${e.message}`); console.error("[sync]", e.message); }
+
   // ── 2. Delinquency (+ late fee policy resolution) ───────────────────────
   try {
     // Each delinquent occupancy is tagged with its active late fee policy from
@@ -462,6 +494,57 @@ export async function syncAll() {
     totalRecords += mapped.length;
     console.log(`[sync] Owner insurance: ${mapped.length} policies`);
   } catch (e) { errors.push(`owner_insurance: ${e.message}`); console.error("[sync]", e.message); }
+
+  // ── 15. Lease history (2-year window, for vacancy-gap KPI) ──────────────
+  try {
+    const from = new Date(now.getFullYear() - 2, now.getMonth(), 1).toISOString().slice(0, 7);
+    const rows = await appfolio.leaseHistory(from, currentMonth);
+    clearTable("lease_history");
+    const mapped = rows.map(r => ({
+      property_name: r.property_name || "",
+      property_id: r.property_id ? String(r.property_id) : "",
+      unit_name: r.unit_name || "",
+      unit_id: r.unit_id ? String(r.unit_id) : "",
+      tenant_name: r.tenant_name || "",
+      status: r.status || "",
+      renewal: r.renewal || "",
+      lease_start: r.lease_start || "",
+      lease_end: r.lease_end || "",
+      move_in: r.move_in || "",
+      move_out: r.move_out || "",
+      synced_at,
+    }));
+    const cols = ["property_name","property_id","unit_name","unit_id","tenant_name",
+      "status","renewal","lease_start","lease_end","move_in","move_out","synced_at"];
+    if (mapped.length) upsertMany("lease_history", mapped, cols);
+    totalRecords += mapped.length;
+    console.log(`[sync] Lease history: ${mapped.length} leases`);
+  } catch (e) { errors.push(`lease_history: ${e.message}`); console.error("[sync]", e.message); }
+
+  // ── 16. Inspections (Building Walkthroughs → inspection KPI) ────────────
+  try {
+    const rows = await appfolio.inspectionDetail();
+    clearTable("inspections");
+    const mapped = rows.map((r, i) => ({
+      inspection_id: r.inspection_id ? String(r.inspection_id) : `ins-${i}`,
+      inspection_name: r.inspection_name || "",
+      property_name: r.property_name || "",
+      property_id: r.property_id ? String(r.property_id) : "",
+      unit: r.unit || "",
+      unit_id: r.unit_id ? String(r.unit_id) : "",
+      status: r.status || "",
+      inspected_on: r.inspected_on || "",
+      marked_done_on: r.marked_done_on || "",
+      marked_done_by: r.marked_done_by || "",
+      created_on: r.created_on || "",
+      synced_at,
+    }));
+    const cols = ["inspection_id","inspection_name","property_name","property_id","unit","unit_id",
+      "status","inspected_on","marked_done_on","marked_done_by","created_on","synced_at"];
+    if (mapped.length) upsertMany("inspections", mapped, cols);
+    totalRecords += mapped.length;
+    console.log(`[sync] Inspections: ${mapped.length} rows`);
+  } catch (e) { errors.push(`inspections: ${e.message}`); console.error("[sync]", e.message); }
 
   // ── Sync log ────────────────────────────────────────────────────────────
   const duration = Date.now() - start;

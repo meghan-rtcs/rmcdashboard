@@ -82,6 +82,72 @@ function migrate() {
       synced_at TEXT
     );
 
+    -- Lease history (from lease_history report, ~2yr window) — used for
+    -- turnover-to-re-lease vacancy gap KPI on the Team Performance tab.
+    CREATE TABLE IF NOT EXISTS lease_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_name TEXT, property_id TEXT,
+      unit_name TEXT, unit_id TEXT,
+      tenant_name TEXT, status TEXT, renewal TEXT,
+      lease_start TEXT, lease_end TEXT,
+      move_in TEXT, move_out TEXT,
+      synced_at TEXT
+    );
+
+    -- Inspections (from inspection_detail report) — Building Walkthroughs
+    -- feed Mark's inspection KPI on the Team Performance tab.
+    CREATE TABLE IF NOT EXISTS inspections (
+      inspection_id TEXT PRIMARY KEY,
+      inspection_name TEXT,
+      property_name TEXT, property_id TEXT,
+      unit TEXT, unit_id TEXT,
+      status TEXT,
+      inspected_on TEXT, marked_done_on TEXT, marked_done_by TEXT,
+      created_on TEXT,
+      synced_at TEXT
+    );
+
+    -- Team Performance: KPI definitions (editable config, not hardcoded)
+    CREATE TABLE IF NOT EXISTS kpi_config (
+      id TEXT PRIMARY KEY,
+      department TEXT,
+      label TEXT, description TEXT,
+      scope TEXT,               -- 'department' | 'individual'
+      assigned_to TEXT,         -- employee id for individual scope
+      data_source TEXT,
+      direction TEXT,           -- 'higher_is_better' | 'lower_is_better'
+      unit TEXT,                -- 'percent' | 'days' | 'count' | 'currency'
+      tiers TEXT,               -- JSON {good:{threshold,payout},better:{...},best:{...}} (thresholds may be null = not configured)
+      active INTEGER DEFAULT 1,
+      effective_quarter TEXT,
+      sort INTEGER DEFAULT 0
+    );
+
+    -- Team Performance: employee roster with department weight allocations
+    CREATE TABLE IF NOT EXISTS kpi_roster (
+      id TEXT PRIMARY KEY,
+      name TEXT, role TEXT,
+      allocations TEXT,         -- JSON {"Property Management":1,"Maintenance":0.5,...}
+      active INTEGER DEFAULT 1,
+      sort INTEGER DEFAULT 0
+    );
+
+    -- Team Performance: locked quarter snapshots (bonuses already paid must
+    -- not change when AppFolio data is edited retroactively)
+    CREATE TABLE IF NOT EXISTS quarter_results (
+      quarter TEXT PRIMARY KEY, -- e.g. '2026-Q3'
+      payload TEXT,             -- JSON of full computed team performance
+      snapshot_at TEXT
+    );
+
+    -- Team Performance: per-employee per-quarter scheduled-hours overrides
+    CREATE TABLE IF NOT EXISTS team_overrides (
+      quarter TEXT NOT NULL,
+      employee TEXT NOT NULL,
+      scheduled_hours REAL,
+      PRIMARY KEY (quarter, employee)
+    );
+
     -- Renewals (from renewal_summary)
     CREATE TABLE IF NOT EXISTS renewals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -286,6 +352,7 @@ function migrate() {
   addCol("properties", "insurance_expiration", "TEXT");
   addCol("properties", "owners", "TEXT");
   addCol("delinquency", "late_fee_policy", "TEXT");
+  addCol("units", "rentable", "TEXT");
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
