@@ -819,30 +819,41 @@
       );
     }
 
-    function CeoTab({ d }) {
-      const [authed, setAuthed] = useState(false);
+    // Shared client-side password gate for restricted tabs (CEO View, Team
+    // Performance). Unlocking one tab unlocks the others for this page load.
+    let restrictedUnlocked = false;
+    function PasswordGate({ label, children }) {
+      const [authed, setAuthed] = useState(restrictedUnlocked);
       const [pw, setPw] = useState("");
       const [err, setErr] = useState(false);
-      const f = d.financials, o = d.occupancy, l = d.leasing, ch = d.charts;
+      const tryUnlock = () => {
+        if (pw === "RTCS") { restrictedUnlocked = true; setAuthed(true); }
+        else setErr(true);
+      };
 
       if (!authed) {
         return (
           <div style={{ maxWidth: 360, margin: "60px auto" }}>
             <div style={{ background: C.card, border: "1px solid " + C.border, borderRadius: 12, padding: "28px 32px", boxShadow: "0 4px 18px rgba(0,0,0,0.04)" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>CEO View</div>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, marginBottom: 6 }}>{label}</div>
               <div style={{ fontSize: 15, color: C.black, marginBottom: 18, fontWeight: 500 }}>Enter password to continue</div>
               <input type="password" value={pw} autoFocus
                 onChange={(e) => { setPw(e.target.value); setErr(false); }}
-                onKeyDown={(e) => { if (e.key === "Enter") { pw === "RTCS" ? setAuthed(true) : setErr(true); } }}
+                onKeyDown={(e) => { if (e.key === "Enter") tryUnlock(); }}
                 placeholder="Password"
                 style={{ width: "100%", padding: "10px 12px", border: "1px solid " + (err ? C.red : C.border), borderRadius: 8, fontSize: 14, marginBottom: 12, outline: "none" }} />
-              <button onClick={() => (pw === "RTCS" ? setAuthed(true) : setErr(true))}
+              <button onClick={tryUnlock}
                 style={{ width: "100%", padding: "10px", background: C.black, color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 14 }}>Unlock</button>
               {err ? <p style={{ color: C.red, fontSize: 12.5, marginTop: 10 }}>Incorrect password</p> : null}
             </div>
           </div>
         );
       }
+      return children;
+    }
+
+    function CeoTab({ d }) {
+      const f = d.financials, o = d.occupancy, l = d.leasing, ch = d.charts;
 
       const revData = (ch.monthlyRevenue || []).map((r) => ({ label: fmt.monthShort(r.month), gross: r.gross, net: r.net, expense: r.expense }));
       const delData = (ch.delinquencyTrend || []).map((r) => ({ label: fmt.monthShort(r.month), total: r.total }));
@@ -1311,8 +1322,8 @@
                   {tab === "dashboard" && <DashboardTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "leasing" && <LeasingTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "operations" && <OperationsTab d={data.dashboard} rangeLabel={rangeLabel} />}
-                  {tab === "team" && <TeamTab />}
-                  {tab === "ceo" && <CeoTab d={data.dashboard} />}
+                  {tab === "team" && <PasswordGate label="Team Performance"><TeamTab /></PasswordGate>}
+                  {tab === "ceo" && <PasswordGate label="CEO View"><CeoTab d={data.dashboard} /></PasswordGate>}
                   {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
                     <div style={{ marginTop: 20, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.amber, borderRadius: 10, padding: 18 }}>
                       <p style={{ fontSize: 13, color: C.muted }}>No data yet. Make sure AppFolio credentials are set, then click <b>Sync Now</b>.</p>
