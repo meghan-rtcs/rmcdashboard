@@ -423,37 +423,56 @@ function currentPeriod() {
   return new Date().toISOString().slice(0, 7);
 }
 
-// Mon–Fri days from the 1st of the period through today (inclusive).
-function workdaysElapsed(period) {
-  const [y, m] = period.split("-").map(Number);
-  const today = new Date();
-  const isCurrent = today.toISOString().slice(0, 7) === period;
-  const last = isCurrent ? today.getDate() : new Date(y, m, 0).getDate();
+function monthsInWindow(start, end) {
+  const out = [];
+  const d = new Date(start + "T12:00:00");
+  const stop = new Date(end + "T12:00:00");
+  while (d < stop) {
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    d.setMonth(d.getMonth() + 1);
+  }
+  return out;
+}
+
+// Mon–Fri days in [start, end), capped at today for an in-progress period.
+function workdaysInWindow(start, end) {
+  const today = new Date().toISOString().slice(0, 10);
+  const stop = end <= today ? end : new Date(Date.parse(today + "T12:00:00") + 86400000).toISOString().slice(0, 10);
   let count = 0;
-  for (let d = 1; d <= last; d++) {
-    const dow = new Date(y, m - 1, d).getDay();
+  for (let d = new Date(start + "T12:00:00"); d < new Date(stop + "T12:00:00"); d.setDate(d.getDate() + 1)) {
+    const dow = d.getDay();
     if (dow !== 0 && dow !== 6) count++;
   }
   return count;
 }
 
-export function computeBillableHours(period) {
-  period = /^\d{4}-\d{2}$/.test(period || "") ? period : currentPeriod();
-  const monthStart = `${period}-01`;
-  const monthEnd = `${period}-31`;
+export function computeBillableHours(periodOrRange) {
+  const isMonth = /^\d{4}-\d{2}$/.test(periodOrRange || "");
+  const range = isMonth ? null : normalizeRange(periodOrRange);
+  const period = isMonth ? periodOrRange : null;
+  const [windowStart, windowEnd] = isMonth
+    ? [`${period}-01`, new Date(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 1).toISOString().slice(0, 10)]
+    : rangeBounds(range);
+  const months = monthsInWindow(windowStart, windowEnd);
+  const editablePeriod = months.length === 1 ? months[0] : null;
   const logged = many(
-    "SELECT tech, SUM(worked_hours) h, COUNT(*) entries FROM labor_entries WHERE work_date >= ? AND work_date <= ? AND tech != '' GROUP BY tech",
-    [monthStart, monthEnd]
+    "SELECT tech, SUM(worked_hours) h, COUNT(*) entries FROM labor_entries WHERE work_date >= ? AND work_date < ? AND tech != '' GROUP BY tech",
+    [windowStart, windowEnd]
   );
   // PTO is still entered manually; "other billable" hours now come from the
   // approved rows of the shared Google Sheet (replacing in-dashboard entry).
   const adjustments = many(
-    "SELECT tech, pto_hours FROM labor_adjustments WHERE period = ?",
-    [period]
+    `SELECT tech, SUM(pto_hours) pto_hours FROM labor_adjustments
+     WHERE period IN (${months.map(() => "?").join(",")}) GROUP BY tech`,
+    months
   );
   const sheetHours = many(
-    "SELECT employee, SUM(hours) h FROM sheet_billable_hours WHERE approved_by != '' AND work_date >= ? AND work_date <= ? GROUP BY employee",
-    [monthStart, monthEnd]
+    "SELECT employee, SUM(hours) h, COUNT(*) rows FROM sheet_billable_hours WHERE approved_by != '' AND work_date >= ? AND work_date < ? GROUP BY employee",
+    [windowStart, windowEnd]
+  );
+  const sheetPending = one(
+    "SELECT COALESCE(SUM(hours),0) h, COUNT(*) rows FROM sheet_billable_hours WHERE approved_by = '' AND work_date >= ? AND work_date < ?",
+    [windowStart, windowEnd]
   );
   const byTech = new Map();
   for (const r of logged) {
@@ -471,7 +490,7 @@ export function computeBillableHours(period) {
     if (!t) { t = { tech: s.employee, logged: 0, entries: 0, pto: 0, extra: 0 }; byTech.set(s.employee, t); }
     t.extra = round(t.extra + num(s.h), 2);
   }
-  const workdays = workdaysElapsed(period);
+  const workdays = workdaysInWindow(windowStart, windowEnd);
   const baseHours = workdays * 8;
   const techs = [...byTech.values()].map((t) => {
     const available = Math.max(baseHours - t.pto, 0);
@@ -496,13 +515,21 @@ export function computeBillableHours(period) {
   );
 
   return {
-    period,
+    period: editablePeriod,
+    range,
+    label: isMonth ? period : rangeLabel(range),
+    windowStart,
+    windowEnd,
+    editable: Boolean(editablePeriod),
     workdays,
     baseHours,
     techs,
     totalLogged: round(totals.logged, 2),
     totalPto: round(totals.pto, 2),
     totalExtra: round(totals.extra, 2),
+    sheetRows: sheetHours.reduce((sum, r) => sum + num(r.rows), 0),
+    pendingSheetHours: round(num(sheetPending.h), 2),
+    pendingSheetRows: num(sheetPending.rows),
     totalAvailable: round(totals.available, 2),
     totalBillable: round(totals.billable, 2),
     utilization: totals.available ? round((totals.billable / totals.available) * 100) : 0,
@@ -551,7 +578,7 @@ function expCounts(table, col, where = "1=1") {
 
 function buildOperations(range) {
   // 1. Billable hours (current month)
-  const billableHours = computeBillableHours();
+  const billableHours = computeBillableHours(range);
 
   // 2. Move-in quality
   const moveInRows = computeMoveInWo(range);
@@ -897,9 +924,31 @@ function drillRegistry(range) {
     { key: "work_order_number", label: "WO #" },
     { key: "description", label: "Description" },
   ];
-  const period = currentPeriod();
-  dd.laborEntries = make(`Billable Labor Entries (${period})`, laborCols,
-    `SELECT work_date, tech, property_name, unit, worked_hours, work_order_number, description FROM labor_entries WHERE work_date >= '${period}-01' ORDER BY work_date DESC LIMIT ${LIM}`);
+  const [laborStart, laborEnd] = rangeBounds(range);
+  dd.laborEntries = make(`Billable Hours (${rangeLabel(range)})`, [
+    { key: "work_date", label: "Date" },
+    { key: "tech", label: "Tech" },
+    { key: "source", label: "Source" },
+    { key: "status", label: "Status" },
+    { key: "property_name", label: "Property / Unit" },
+    { key: "worked_hours", label: "Hours", money: false },
+    { key: "work_order_number", label: "WO #" },
+    { key: "description", label: "Description" },
+  ], `SELECT work_date, tech, source, status, property_name, worked_hours, work_order_number, description
+      FROM (
+        SELECT work_date, tech, 'AppFolio work order' source, 'Counted' status,
+               trim(COALESCE(property_name,'') || CASE WHEN COALESCE(unit,'') != '' THEN ' · ' || unit ELSE '' END) property_name,
+               worked_hours, work_order_number, description
+        FROM labor_entries
+        WHERE work_date >= '${laborStart}' AND work_date < '${laborEnd}' AND tech != ''
+        UNION ALL
+        SELECT work_date, employee tech, 'Google Sheet' source,
+               CASE WHEN approved_by != '' THEN 'Approved — counted' ELSE 'Pending — excluded' END status,
+               property_unit property_name, hours worked_hours, '' work_order_number, description
+        FROM sheet_billable_hours
+        WHERE work_date >= '${laborStart}' AND work_date < '${laborEnd}'
+      )
+      ORDER BY work_date DESC LIMIT ${LIM}`);
 
   // Operations — move-in quality (computed rows)
   const moveInCols = [
