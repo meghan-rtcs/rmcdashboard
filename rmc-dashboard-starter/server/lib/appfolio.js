@@ -170,7 +170,15 @@ export const appfolio = {
   delinquency: (body = {}) => fetchAll("delinquency.json", body),
   lateFeePolicyComparison: (body = {}) => fetchAll("late_fee_policy_comparison.json", body),
   agedReceivablesDetail: (body = {}) => fetchAll("aged_receivables_detail.json", body),
-  ownerInsurance: (body = {}) => fetchAll("owner_insurance.json", body),
+  // AppFolio silently defaults this report to a short upcoming-expiration
+  // window when no filters are supplied. Request a wide range so insurance
+  // compliance reflects the complete active policy inventory.
+  ownerInsurance: (body = {}) =>
+    fetchAll("owner_insurance.json", {
+      expires_on_from: "2000-01-01",
+      expires_on_to: "2100-12-31",
+      ...body,
+    }),
   inspectionDetail: (body = {}) => fetchAll("inspection_detail.json", body),
   delinquencyAsOf: (asOfDate, body = {}) =>
     fetchAll("delinquency_as_of.json", { occurred_on_to: asOfDate, ...body }),

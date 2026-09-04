@@ -202,8 +202,11 @@ function kpiOwnerInsurance() {
          SELECT 1 FROM owner_insurance oi
          WHERE oi.properties != '' AND COALESCE(oi.expiration_date,'') != ''
            AND date(oi.expiration_date) >= date('now')
-           AND instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
-                     ',' || lower(trim(p.property_name)) || ',') > 0
+            AND (
+              lower(trim(oi.properties)) = lower(trim(p.property_name))
+              OR instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
+                       ',' || lower(trim(p.property_name)) || ',') > 0
+            )
        )`).c);
   return {
     value: total ? round((covered / total) * 100) : null,

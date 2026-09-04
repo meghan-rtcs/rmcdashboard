@@ -505,6 +505,11 @@
 
       return (
         <div>
+          <div style={{ background: C.bg, border: "1px solid " + C.border, borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.muted, marginTop: 12 }}>
+            <strong style={{ color: C.black }}>Activity period: {rangeLabel}.</strong>{" "}
+            This changes inquiries, applications, move-ins, renewals, and completed-work-order activity.
+            Current-state figures—occupancy, delinquency, rent, and open work orders—always show the latest data.
+          </div>
           {/* HERO */}
           <SectionHeader title="Top of Mind" subtitle="Tap any tile or chart for the records behind it" />
           <div style={gridAuto(220)}>
@@ -803,11 +808,11 @@
             <KpiCard live label="Policies Tracked" value={fmt.num(ins.vendors.tracked)} drill="vendorInsAll" />
           </div>
 
-          <SectionHeader title="Insurance Compliance — Properties / Owners" subtitle="Owner insurance policies from the AppFolio Owner Insurance report (property-page expiration dates are being phased out)" />
+          <SectionHeader title="Insurance Compliance — Properties / Owners" subtitle="Complete owner insurance inventory from the AppFolio Owner Insurance report · current-state data (not affected by Activity period)" />
           <div style={gridAuto(200)}>
             <KpiCard live label="Expired" value={fmt.num(ins.owners.expired)} tone={ins.owners.expired ? "bad" : "good"} drill="ownerInsExpired" />
             <KpiCard live label="Expiring ≤ 60 Days" value={fmt.num(ins.owners.expiring)} tone={ins.owners.expiring ? "warn" : "good"} drill="ownerInsExpiring" />
-            <KpiCard live label="No Policy on File" value={fmt.num(ins.owners.missing)} tone={ins.owners.missing ? "warn" : "good"} drill="ownerInsMissing" />
+            <KpiCard live label="Properties Not Linked to Policy" value={fmt.num(ins.owners.missing)} tone={ins.owners.missing ? "warn" : "good"} drill="ownerInsMissing" />
             <KpiCard live label="Policies Tracked" value={fmt.num(ins.owners.tracked)} drill="ownerInsAll" />
           </div>
 
@@ -1296,7 +1301,7 @@
                 ))}
               </div>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "6px 0" }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: "uppercase", letterSpacing: 0.4 }}>Date range</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: "uppercase", letterSpacing: 0.4 }}>Activity period</span>
                 <div style={{ display: "inline-flex", background: C.bg || "#F1ECE0", border: "1px solid " + C.border, borderRadius: 8, padding: 2 }}>
                   {rangeOptions.map((r) => (
                     <button key={r.id} onClick={() => setRange(r.id)} title={r.full}

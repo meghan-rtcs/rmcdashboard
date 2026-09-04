@@ -611,9 +611,12 @@ function buildOperations(range) {
      WHERE TRIM(COALESCE(p.property_name,'')) != ''
        AND NOT EXISTS (
        SELECT 1 FROM owner_insurance oi
-       WHERE oi.properties != ''
-         AND instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
-                   ',' || lower(trim(p.property_name)) || ',') > 0
+        WHERE oi.properties != ''
+          AND (
+            lower(trim(oi.properties)) = lower(trim(p.property_name))
+            OR instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
+                     ',' || lower(trim(p.property_name)) || ',') > 0
+          )
      )`
   ).c);
 
@@ -998,9 +1001,12 @@ function drillRegistry(range) {
      WHERE TRIM(COALESCE(p.property_name,'')) != ''
        AND NOT EXISTS (
        SELECT 1 FROM owner_insurance oi
-       WHERE oi.properties != ''
-         AND instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
-                   ',' || lower(trim(p.property_name)) || ',') > 0
+        WHERE oi.properties != ''
+          AND (
+            lower(trim(oi.properties)) = lower(trim(p.property_name))
+            OR instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
+                     ',' || lower(trim(p.property_name)) || ',') > 0
+          )
      ) ORDER BY property_name LIMIT ${LIM}`);
 
   // Non-revenue units (rentable = No in the unit directory). AppFolio's API
