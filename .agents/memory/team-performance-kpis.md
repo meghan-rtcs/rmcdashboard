@@ -5,6 +5,10 @@ description: Durable rules behind the Team Performance tab — quarter locking, 
 
 # Team Performance (KPIs & Bonuses) — durable decisions
 
+- Owner access uses first-run password creation, not a configured owner password. Recovery uses the existing shared CEO View password and explicit confirmation, clears the credential, and invalidates prior owner sessions.
+  **Why:** the user explicitly chose self-service setup and shared-CEO recovery after being warned that anyone knowing that shared password can take over owner access.
+  **How to apply:** do not request an owner-password secret; preserve separate server-checked owner authorization and never install a test credential in the real database.
+
 - Incentives use at most four evenly weighted KPIs per employee and a configurable $1,000 quarterly cap, with Good/Better/Best paying 50%/75%/100%; below Good pays zero. Discretionary answers and calculations require a separate owner session, not the shared CEO gate.
   **Why:** the client replaced department pool payouts with employee-level caps and explicitly required private owner scoring.
   **How to apply:** preserve cent-exact caps, owner-only authorization, and distinguish frozen payouts from explicit retroactive re-scoring.

@@ -2,21 +2,27 @@ import express from "express";
 import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
-import { getDb, query } from "./lib/db.js";
+import { getDb, query, run } from "./lib/db.js";
 import { syncAll } from "./lib/sync.js";
 import { normalizeRange } from "./lib/aggregator.js";
+import {
+  clearOwnerPassword,
+  makeOwnerSession,
+  ownerSetupRequired,
+  setInitialOwnerPassword,
+  validOwnerPassword,
+  validOwnerSession,
+  verifyOwnerPassword,
+} from "./lib/owner-auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
 
-// ── Password protection (cookie session, password only) ───────────────────
-// Gates the entire dashboard — static page, API, everything — behind a single
-// password supplied via the DASHBOARD_PASSWORD env var. Users sign in on a
-// custom /login.html page (password only, no username); success sets an
-// HttpOnly session cookie derived from the password, so changing the
-// password invalidates all existing sessions.
+// ── Dashboard and owner session protection ─────────────────────────────────
+// The established dashboard/CEO password continues to gate the normal
+// dashboard. Owner access is a separate, persisted credential managed below.
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "";
 const SESSION_TOKEN = crypto
   .createHmac("sha256", DASHBOARD_PASSWORD || "unconfigured")
@@ -24,17 +30,24 @@ const SESSION_TOKEN = crypto
   .digest("hex");
 const SESSION_COOKIE = "rmc_auth";
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
-const OWNER_PASSWORD = process.env.OWNER_PASSWORD || "";
 const OWNER_COOKIE = "rmc_owner";
 const OWNER_SESSION_MAX_AGE = 8 * 60 * 60; // owner access expires the same day
 const COOKIE_ATTRS = "; HttpOnly; Path=/; SameSite=Lax; Secure";
 const ownerLoginAttempts = new Map();
+// This is the SHA-256 verifier for the pre-existing CEO View password. The
+// CEO screen remains unchanged; reset verification is moved server-side so a
+// caller cannot merely claim that it unlocked the client-side gate.
+const CEO_VIEW_PASSWORD_HASH = "069233e7e1a56a244a0a2f5b4a1a7b43dd29d2bb1c4d9a5398c7212a66419371";
 
 function safeEqual(a, b) {
   const ab = Buffer.from(String(a));
   const bb = Buffer.from(String(b));
   if (ab.length !== bb.length) return false;
   return crypto.timingSafeEqual(ab, bb);
+}
+function validCeoViewPassword(password) {
+  const digest = crypto.createHash("sha256").update(String(password)).digest("hex");
+  return safeEqual(digest, CEO_VIEW_PASSWORD_HASH);
 }
 
 function getCookie(req, name) {
@@ -53,26 +66,6 @@ function getCookie(req, name) {
   return null;
 }
 
-function makeOwnerSession() {
-  const payload = Buffer.from(JSON.stringify({
-    role: "owner", exp: Date.now() + OWNER_SESSION_MAX_AGE * 1000,
-    nonce: crypto.randomBytes(18).toString("base64url"),
-  })).toString("base64url");
-  const sig = crypto.createHmac("sha256", OWNER_PASSWORD).update(payload).digest("base64url");
-  return payload + "." + sig;
-}
-function validOwnerSession(token) {
-  if (!OWNER_PASSWORD || !token || !token.includes(".")) return false;
-  const parts = token.split(".");
-  if (parts.length !== 2) return false;
-  const [payload, sig] = parts;
-  const expected = crypto.createHmac("sha256", OWNER_PASSWORD).update(payload).digest("base64url");
-  if (!safeEqual(sig, expected)) return false;
-  try {
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return data.role === "owner" && Number(data.exp) > Date.now();
-  } catch { return false; }
-}
 function sameOrigin(req) {
   const origin = req.get("origin");
   // Browsers send Origin for fetch/XHR mutations. Reject missing or foreign
@@ -106,25 +99,82 @@ app.post("/api/login", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/owner/login", requireSameOrigin, (req, res) => {
-  if (!OWNER_PASSWORD) return res.status(503).json({ error: "OWNER_PASSWORD is not configured on the server." });
+function ownerAttemptAllowed(req, res) {
   const ip = req.ip || req.socket.remoteAddress || "unknown";
   const now = Date.now();
   const prior = ownerLoginAttempts.get(ip) || { count: 0, resetAt: now + 15 * 60 * 1000 };
   if (now > prior.resetAt) { prior.count = 0; prior.resetAt = now + 15 * 60 * 1000; }
   if (prior.count >= 5) {
     res.set("Retry-After", String(Math.ceil((prior.resetAt - now) / 1000)));
-    return res.status(429).json({ error: "Too many attempts. Try again later." });
+    res.status(429).json({ error: "Too many attempts. Try again later." });
+    return null;
   }
+  return { ip, prior };
+}
+function failedOwnerAttempt(attempt) {
+  attempt.prior.count++;
+  ownerLoginAttempts.set(attempt.ip, attempt.prior);
+}
+function clearOwnerAttempts(attempt) {
+  ownerLoginAttempts.delete(attempt.ip);
+}
+
+// This endpoint intentionally returns only setup state and is public so the
+// owner-login page can decide whether to show setup or sign-in.
+app.get("/api/owner/status", (_req, res) => {
+  res.json({ setupRequired: ownerSetupRequired() });
+});
+
+app.post("/api/owner/setup", requireSameOrigin, async (req, res) => {
+  const attempt = ownerAttemptAllowed(req, res);
+  if (!attempt) return;
   const password = String((req.body && req.body.password) || "");
-  if (!safeEqual(password, OWNER_PASSWORD)) {
-    prior.count++;
-    ownerLoginAttempts.set(ip, prior);
+  const confirmation = String((req.body && req.body.confirmPassword) || "");
+  if (!validOwnerPassword(password) || !safeEqual(password, confirmation)) {
+    failedOwnerAttempt(attempt);
+    return res.status(400).json({ error: "Password must be at least 12 characters and match confirmation." });
+  }
+  const created = await setInitialOwnerPassword(password);
+  if (!created.ok && created.reason === "already_configured") {
+    return res.status(409).json({ error: "Owner access has already been configured. Sign in instead." });
+  }
+  if (!created.ok) return res.status(400).json({ error: "Password must be at least 12 characters." });
+  clearOwnerAttempts(attempt);
+  res.set("Set-Cookie", `${OWNER_COOKIE}=${makeOwnerSession(OWNER_SESSION_MAX_AGE)}; Max-Age=${OWNER_SESSION_MAX_AGE}${COOKIE_ATTRS}`);
+  res.status(201).json({ ok: true, expiresIn: OWNER_SESSION_MAX_AGE });
+});
+
+app.post("/api/owner/login", requireSameOrigin, async (req, res) => {
+  const attempt = ownerAttemptAllowed(req, res);
+  if (!attempt) return;
+  if (ownerSetupRequired()) return res.status(409).json({ error: "Owner access has not been set up yet." });
+  const password = String((req.body && req.body.password) || "");
+  if (!(await verifyOwnerPassword(password))) {
+    failedOwnerAttempt(attempt);
     return res.status(401).json({ error: "Incorrect password" });
   }
-  ownerLoginAttempts.delete(ip);
-  res.set("Set-Cookie", `${OWNER_COOKIE}=${makeOwnerSession()}; Max-Age=${OWNER_SESSION_MAX_AGE}${COOKIE_ATTRS}`);
+  clearOwnerAttempts(attempt);
+  res.set("Set-Cookie", `${OWNER_COOKIE}=${makeOwnerSession(OWNER_SESSION_MAX_AGE)}; Max-Age=${OWNER_SESSION_MAX_AGE}${COOKIE_ATTRS}`);
   res.json({ ok: true, expiresIn: OWNER_SESSION_MAX_AGE });
+});
+
+app.post("/api/owner/reset", requireSameOrigin, (req, res) => {
+  const attempt = ownerAttemptAllowed(req, res);
+  if (!attempt) return;
+  // The established CEO View credential is verified server-side. It is not an
+  // owner credential; no owner secret appears in config or source.
+  const ceoPassword = String((req.body && req.body.ceoPassword) || "");
+  if (!validCeoViewPassword(ceoPassword)) {
+    failedOwnerAttempt(attempt);
+    return res.status(401).json({ error: "CEO View password is incorrect." });
+  }
+  if (req.body?.confirmReset !== true) {
+    return res.status(400).json({ error: "Reset confirmation is required." });
+  }
+  if (!clearOwnerPassword()) return res.status(409).json({ error: "Owner access is already awaiting setup." });
+  clearOwnerAttempts(attempt);
+  res.set("Set-Cookie", `${OWNER_COOKIE}=; Max-Age=0${COOKIE_ATTRS}`);
+  res.json({ ok: true, setupRequired: true });
 });
 
 const PUBLIC_PATHS = new Set(["/login.html", "/owner-login.html", "/logo.png", "/favicon.ico"]);
@@ -217,7 +267,7 @@ app.get("/api/property-groups", (_req, res) => {
 });
 
 // ── API: Labor adjustments (PTO + off-AppFolio billable hours per tech) ────
-app.get("/api/labor-adjustments", async (req, res) => {
+app.get("/api/labor-adjustments", requireOwner, async (req, res) => {
   try {
     const { computeBillableHours } = await import("./lib/aggregator.js");
     const period = String(req.query.period || "");
@@ -228,7 +278,7 @@ app.get("/api/labor-adjustments", async (req, res) => {
   }
 });
 
-app.post("/api/labor-adjustments", async (req, res) => {
+app.post("/api/labor-adjustments", requireSameOrigin, requireOwner, async (req, res) => {
   try {
     const { period, tech, pto_hours, extra_hours } = req.body || {};
     if (!/^\d{4}-\d{2}$/.test(String(period || ""))) {
@@ -263,7 +313,7 @@ app.post("/api/labor-adjustments", async (req, res) => {
 });
 
 // ── API: Team Performance (KPIs & Bonuses) ─────────────────────────────────
-app.get("/api/team", async (req, res) => {
+app.get("/api/team", requireOwner, async (req, res) => {
   try {
     const { getTeamQuarter } = await import("./lib/kpi.js");
     res.json(getTeamQuarter(String(req.query.quarter || ""), String(req.query.retroactive || "") === "1", String(req.query.propertyGroup || "configured")));
@@ -273,7 +323,7 @@ app.get("/api/team", async (req, res) => {
   }
 });
 
-app.get("/api/team/drilldown/:key", async (req, res) => {
+app.get("/api/team/drilldown/:key", requireOwner, async (req, res) => {
   try {
     const { getTeamDrilldown } = await import("./lib/kpi.js");
     const dd = getTeamDrilldown(req.params.key, String(req.query.quarter || ""), String(req.query.propertyGroup || "configured"));
@@ -300,8 +350,7 @@ app.post("/api/team/snapshot", requireSameOrigin, requireOwner, async (req, res)
 });
 
 // KPI config editor (thresholds, payouts, active flags)
-app.get("/api/team/config", async (req, res) => {
-  if (!validOwnerSession(getCookie(req, OWNER_COOKIE))) return res.status(403).json({ error: "Owner sign-in required" });
+app.get("/api/team/config", requireOwner, async (req, res) => {
   try {
     const { seedKpiConfig, getTeamSettings } = await import("./lib/kpi.js");
     seedKpiConfig();
@@ -494,11 +543,14 @@ async function scheduledSync() {
   }
 }
 
-// Run initial sync after 5s, then every 2 hours
-setTimeout(scheduledSync, 5000);
-setInterval(scheduledSync, 2 * 60 * 60 * 1000);
+// Do not schedule external sync work when the app is imported by the isolated
+// HTTP auth tests. Normal application startup is unchanged.
+if (process.env.RMC_TEST_MODE !== "1") {
+  setTimeout(scheduledSync, 5000);
+  setInterval(scheduledSync, 2 * 60 * 60 * 1000);
+  app.listen(PORT, () => {
+    console.log(`RMC Dashboard running on port ${PORT}`);
+  });
+}
 
-// ── Start ─────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`RMC Dashboard running on port ${PORT}`);
-});
+export { app };

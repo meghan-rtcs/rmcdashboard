@@ -2,27 +2,63 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RMC Dashboard — Owner Sign In</title>
+  <title>RMC Dashboard — Owner Access</title>
   <style>
     *{box-sizing:border-box} body{margin:0;min-height:100vh;display:grid;place-items:center;background:#FBF7F0;color:#1A1A1A;font:15px Outfit,Arial,sans-serif;padding:20px}
-    form{width:min(380px,100%);background:#fff;border:1px solid #EBE3D6;border-radius:14px;padding:32px;box-shadow:0 6px 24px #1a1a1a12}
+    form{width:min(400px,100%);background:#fff;border:1px solid #EBE3D6;border-radius:14px;padding:32px;box-shadow:0 6px 24px #1a1a1a12}
     h1{font-size:19px;margin:6px 0 8px}.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;color:#8A8270;text-transform:uppercase}
     p{color:#8A8270;font-size:13px;line-height:1.45} input,button{width:100%;font:inherit;border-radius:8px;padding:11px 12px}
-    input{border:1px solid #E4DCCD;margin:18px 0 12px;background:#FDFBF7}button{border:0;background:#1A1A1A;color:white;font-weight:600}.msg{min-height:18px;color:#C0392B;font-size:12px;margin-top:10px}
+    input{border:1px solid #E4DCCD;margin:9px 0;background:#FDFBF7}button{border:0;background:#1A1A1A;color:white;font-weight:600;margin-top:8px}.msg{min-height:18px;color:#C0392B;font-size:12px;margin-top:10px}.link{display:block;margin-top:16px;border:0;background:none;color:#665C4C;font-size:12px;text-decoration:underline;cursor:pointer;padding:0}.check{display:flex;align-items:flex-start;gap:7px;margin:10px 0;color:#665C4C;font-size:12px}.check input{width:auto;margin:2px 0}
   </style>
 </head>
 <body>
-  <form id="form"><div class="eyebrow">RMC Dashboard</div><h1>Owner sign in</h1>
-    <p>This unlocks owner-only KPI settings, frozen-quarter controls, and discretionary scorecards for this browser session.</p>
-    <input id="pw" type="password" autocomplete="current-password" placeholder="Owner password" autofocus />
-    <button id="btn">Sign in as owner</button><div class="msg" id="msg"></div>
+  <form id="form" novalidate>
+    <div class="eyebrow">RMC Dashboard</div><h1 id="title">Checking owner access…</h1>
+    <p id="description">Please wait.</p><div id="fields"></div>
+    <button id="btn" type="submit" disabled>Continue</button><div class="msg" id="msg" role="alert"></div>
+    <button class="link" id="forgot" type="button" hidden>Forgot owner password?</button>
   </form>
   <script>
-    const form=document.querySelector("#form"),pw=document.querySelector("#pw"),btn=document.querySelector("#btn"),msg=document.querySelector("#msg");
-    form.addEventListener("submit",async(e)=>{e.preventDefault();btn.disabled=true;msg.textContent="";
-      try { const r=await fetch("/api/owner/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw.value})});
-        if(!r.ok) throw new Error((await r.json()).error||"Sign in failed"); location.replace("/"); }
-      catch(err){msg.textContent=err.message;pw.select();btn.disabled=false;}
+    const form=document.querySelector("#form"),title=document.querySelector("#title"),description=document.querySelector("#description"),fields=document.querySelector("#fields"),btn=document.querySelector("#btn"),msg=document.querySelector("#msg"),forgot=document.querySelector("#forgot");
+    let mode="login";
+    const errorMessage=(status,body)=>status===429?"Too many attempts. Try again later.":body?.error||"Something went wrong — try again.";
+    function render(nextMode){
+      mode=nextMode; msg.textContent="";
+      if(mode==="setup"){
+        title.textContent="Set up owner access"; description.textContent="Create the separate password used for owner-only KPI settings, frozen-quarter controls, and discretionary scorecards.";
+        fields.innerHTML='<input id="pw" type="password" autocomplete="new-password" placeholder="Owner password (12 characters minimum)" autofocus required /><input id="confirm" type="password" autocomplete="new-password" placeholder="Confirm owner password" required />';
+        btn.textContent="Set up owner access"; forgot.hidden=true;
+      }else if(mode==="reset"){
+        title.textContent="Reset owner access"; description.textContent="Verify the existing CEO View password, then explicitly confirm this reset. All owner sessions will be signed out.";
+        fields.innerHTML='<input id="ceoPw" type="password" autocomplete="current-password" placeholder="Existing CEO View password" autofocus required /><label class="check"><input id="confirmReset" type="checkbox" /> <span>I understand this clears owner access and signs out every owner session.</span></label>';
+        btn.textContent="Reset owner access"; forgot.hidden=true;
+      }else{
+        title.textContent="Owner sign in"; description.textContent="This unlocks owner-only KPI settings, frozen-quarter controls, and discretionary scorecards for this browser session.";
+        fields.innerHTML='<input id="pw" type="password" autocomplete="current-password" placeholder="Owner password" autofocus required />';
+        btn.textContent="Sign in as owner"; forgot.hidden=false;
+      }
+      btn.disabled=false;
+    }
+    async function loadStatus(){
+      btn.disabled=true;
+      try { const r=await fetch("/api/owner/status"); if(!r.ok) throw new Error(); const status=await r.json(); render(status.setupRequired?"setup":"login"); }
+      catch { title.textContent="Owner access unavailable";description.textContent="Unable to check owner access right now.";msg.textContent="Try refreshing this page."; }
+    }
+    forgot.addEventListener("click",()=>render("reset"));
+    form.addEventListener("submit",async(e)=>{
+      e.preventDefault();btn.disabled=true;msg.textContent="";
+      let url="/api/owner/login",body;
+      if(mode==="setup"){url="/api/owner/setup";body={password:document.querySelector("#pw").value,confirmPassword:document.querySelector("#confirm").value};}
+      else if(mode==="reset"){url="/api/owner/reset";body={ceoPassword:document.querySelector("#ceoPw").value,confirmReset:document.querySelector("#confirmReset").checked};}
+      else body={password:document.querySelector("#pw").value};
+      try {
+        const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        const result=await r.json().catch(()=>({}));
+        if(!r.ok) throw {status:r.status,body:result};
+        if(mode==="reset"){render("setup");msg.style.color="#2D8C3E";msg.textContent="Owner access was reset. Set a new owner password.";return;}
+        location.replace("/");
+      }catch(err){msg.style.color="#C0392B";msg.textContent=errorMessage(err.status,err.body);const input=fields.querySelector('input[type="password"]');if(input) input.select();btn.disabled=false;}
     });
+    loadStatus();
   </script>
 </body></html>

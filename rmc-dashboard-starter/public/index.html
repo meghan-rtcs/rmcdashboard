@@ -680,7 +680,7 @@
         });
         Promise.all(jobs)
           .then(() => fetch("/api/labor-adjustments?period=" + encodeURIComponent(bh.period)))
-          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then((r) => { if (!r.ok) throw new Error(r.status === 403 ? "Owner sign-in required" : "HTTP " + r.status); return r.json(); })
           .then((fresh) => { setBh(fresh); setEdits({}); setSavedAt(Date.now()); })
           .catch((e) => setErr(e.message))
           .finally(() => setSaving(false));
@@ -822,7 +822,7 @@
     }
 
     // Existing CEO gate retained for the CEO view. Owner-only features below
-    // use the separate server-verified OWNER_PASSWORD session instead.
+    // use a separate server-verified owner session.
     let restrictedUnlocked = false;
     function PasswordGate({ label, children }) {
       const [authed, setAuthed] = useState(restrictedUnlocked);
@@ -1111,7 +1111,7 @@
       };
 
       if (loading) return <div style={{ padding: 80, textAlign: "center", color: C.muted }}>Loading team performance…</div>;
-      if (error || !data) return <div style={{ marginTop: 24, padding: 18, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.red, borderRadius: 10 }}><p style={{ color: C.red, fontSize: 13 }}>{error || "No data"}</p></div>;
+      if (error || !data) return <div style={{ marginTop: 24, padding: 18, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.red, borderRadius: 10 }}><p style={{ color: C.red, fontSize: 13 }}>{error || "No data"}</p><a href="/owner-login.html" style={{color:C.black,fontSize:13}}>Set up or sign in to owner access</a></div>;
 
       const totalEarned = data.employees.reduce((s, e) => s + e.earned, 0);
       const totalMax = data.employees.reduce((s, e) => s + e.max, 0);
