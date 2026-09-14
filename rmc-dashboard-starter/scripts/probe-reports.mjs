@@ -31,7 +31,8 @@ for (const [label, fn, body] of [
     const rows = await fn();
     const keys = rows[0] ? Object.keys(rows[0]) : [];
     const insKeys = keys.filter((k) => /insur|polic|liab|coverage|expir/i.test(k));
-    console.log(`OK ${label}: ${rows.length} rows; insurance-ish keys: ${insKeys.join(", ") || "(none)"}`);
+    const groupKeys = keys.filter((k) => /^(property_)?groups?(_name)?$|^property_group_id$/i.test(k));
+    console.log(`OK ${label}: ${rows.length} rows; insurance-ish keys: ${insKeys.join(", ") || "(none)"}; verified group keys: ${groupKeys.join(", ") || "(none)"}`);
     if (insKeys.length && rows.length) {
       const sample = rows.filter((r) => insKeys.some((k) => r[k])).slice(0, 3);
       for (const s of sample) console.log("   sample:", JSON.stringify(Object.fromEntries(insKeys.map((k) => [k, s[k]]))));

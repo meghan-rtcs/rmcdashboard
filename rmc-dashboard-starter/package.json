@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
-    "sync": "node -e \"import('./server/lib/sync.js').then(m => m.syncAll().then(r => console.log(r)))\""
+    "sync": "node -e \"import('./server/lib/sync.js').then(m => m.syncAll().then(r => console.log(r)))\"",
+    "test": "rm -f /tmp/rmc-dashboard-kpi-test.db* && RMC_DB_PATH=/tmp/rmc-dashboard-kpi-test.db node --test server/lib/kpi.test.js"
   },
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.2",

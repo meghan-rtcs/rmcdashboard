@@ -24,8 +24,11 @@ const SESSION_TOKEN = crypto
   .digest("hex");
 const SESSION_COOKIE = "rmc_auth";
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
-// SameSite=None + Secure so the cookie works inside HTTPS iframe previews.
-const COOKIE_ATTRS = "; HttpOnly; Path=/; SameSite=None; Secure";
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || "";
+const OWNER_COOKIE = "rmc_owner";
+const OWNER_SESSION_MAX_AGE = 8 * 60 * 60; // owner access expires the same day
+const COOKIE_ATTRS = "; HttpOnly; Path=/; SameSite=Lax; Secure";
+const ownerLoginAttempts = new Map();
 
 function safeEqual(a, b) {
   const ab = Buffer.from(String(a));
@@ -50,6 +53,45 @@ function getCookie(req, name) {
   return null;
 }
 
+function makeOwnerSession() {
+  const payload = Buffer.from(JSON.stringify({
+    role: "owner", exp: Date.now() + OWNER_SESSION_MAX_AGE * 1000,
+    nonce: crypto.randomBytes(18).toString("base64url"),
+  })).toString("base64url");
+  const sig = crypto.createHmac("sha256", OWNER_PASSWORD).update(payload).digest("base64url");
+  return payload + "." + sig;
+}
+function validOwnerSession(token) {
+  if (!OWNER_PASSWORD || !token || !token.includes(".")) return false;
+  const parts = token.split(".");
+  if (parts.length !== 2) return false;
+  const [payload, sig] = parts;
+  const expected = crypto.createHmac("sha256", OWNER_PASSWORD).update(payload).digest("base64url");
+  if (!safeEqual(sig, expected)) return false;
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return data.role === "owner" && Number(data.exp) > Date.now();
+  } catch { return false; }
+}
+function sameOrigin(req) {
+  const origin = req.get("origin");
+  // Browsers send Origin for fetch/XHR mutations. Reject missing or foreign
+  // origins so authenticated cookies cannot be used cross-site. Compare hosts
+  // rather than req.protocol because the hosted TLS proxy terminates HTTPS
+  // before Express receives the request.
+  try { return !!origin && new URL(origin).host === req.get("host"); } catch { return false; }
+}
+function requireSameOrigin(req, res, next) {
+  if (!sameOrigin(req)) return res.status(403).json({ error: "Same-origin request required" });
+  next();
+}
+function requireOwner(req, res, next) {
+  if (!validOwnerSession(getCookie(req, OWNER_COOKIE))) {
+    return res.status(403).json({ error: "Owner sign-in required" });
+  }
+  next();
+}
+
 app.use(express.json());
 
 app.post("/api/login", (req, res) => {
@@ -64,7 +106,28 @@ app.post("/api/login", (req, res) => {
   res.json({ ok: true });
 });
 
-const PUBLIC_PATHS = new Set(["/login.html", "/logo.png", "/favicon.ico"]);
+app.post("/api/owner/login", requireSameOrigin, (req, res) => {
+  if (!OWNER_PASSWORD) return res.status(503).json({ error: "OWNER_PASSWORD is not configured on the server." });
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const prior = ownerLoginAttempts.get(ip) || { count: 0, resetAt: now + 15 * 60 * 1000 };
+  if (now > prior.resetAt) { prior.count = 0; prior.resetAt = now + 15 * 60 * 1000; }
+  if (prior.count >= 5) {
+    res.set("Retry-After", String(Math.ceil((prior.resetAt - now) / 1000)));
+    return res.status(429).json({ error: "Too many attempts. Try again later." });
+  }
+  const password = String((req.body && req.body.password) || "");
+  if (!safeEqual(password, OWNER_PASSWORD)) {
+    prior.count++;
+    ownerLoginAttempts.set(ip, prior);
+    return res.status(401).json({ error: "Incorrect password" });
+  }
+  ownerLoginAttempts.delete(ip);
+  res.set("Set-Cookie", `${OWNER_COOKIE}=${makeOwnerSession()}; Max-Age=${OWNER_SESSION_MAX_AGE}${COOKIE_ATTRS}`);
+  res.json({ ok: true, expiresIn: OWNER_SESSION_MAX_AGE });
+});
+
+const PUBLIC_PATHS = new Set(["/login.html", "/owner-login.html", "/logo.png", "/favicon.ico"]);
 
 app.use((req, res, next) => {
   // Fail closed: if no password is configured, the dashboard stays locked
@@ -85,7 +148,7 @@ app.use((req, res, next) => {
 
 // Behind the auth gate: only signed-in users can log out their session.
 app.post("/api/logout", (req, res) => {
-  res.set("Set-Cookie", `${SESSION_COOKIE}=; Max-Age=0${COOKIE_ATTRS}`);
+  res.set("Set-Cookie", [`${SESSION_COOKIE}=; Max-Age=0${COOKIE_ATTRS}`, `${OWNER_COOKIE}=; Max-Age=0${COOKIE_ATTRS}`]);
   res.json({ ok: true });
 });
 
@@ -98,35 +161,37 @@ getDb();
 // The dashboard is expensive to build (live AppFolio report calls), and its data
 // only changes after a sync. Cache the built payload in memory with a short TTL
 // and clear it whenever a sync runs, so repeat page loads are instant.
-// Cache is keyed by the selected date range so each window keeps its own entry.
-const dashboardCache = new Map(); // range -> { data, at }
-const dashboardPromise = new Map(); // range -> in-flight promise
+// Cache is keyed by Activity Period and property-group scope.
+const dashboardCache = new Map(); // range|scope -> { data, at }
+const dashboardPromise = new Map(); // range|scope -> in-flight promise
 const DASHBOARD_TTL_MS = 5 * 60 * 1000;
 function clearDashboardCache() { dashboardCache.clear(); dashboardPromise.clear(); }
 
 // Build the dashboard for a given range, coalescing concurrent cache-misses
 // into a single in-flight build so a burst of requests doesn't fan out into
 // many expensive AppFolio report calls.
-function getDashboard(range) {
-  const hit = dashboardCache.get(range);
+function getDashboard(range, propertyGroupScope) {
+  const key = `${range}|${propertyGroupScope}`;
+  const hit = dashboardCache.get(key);
   if (hit && Date.now() - hit.at < DASHBOARD_TTL_MS) {
     return Promise.resolve(hit.data);
   }
-  if (dashboardPromise.has(range)) return dashboardPromise.get(range);
+  if (dashboardPromise.has(key)) return dashboardPromise.get(key);
   const p = (async () => {
     const { buildDashboard } = await import("./lib/aggregator.js");
-    const data = await buildDashboard(range);
-    dashboardCache.set(range, { data, at: Date.now() });
+    const data = await buildDashboard(range, propertyGroupScope);
+    dashboardCache.set(key, { data, at: Date.now() });
     return data;
-  })().finally(() => { dashboardPromise.delete(range); });
-  dashboardPromise.set(range, p);
+  })().finally(() => { dashboardPromise.delete(key); });
+  dashboardPromise.set(key, p);
   return p;
 }
 
 app.get("/api/dashboard", async (req, res) => {
   try {
     const range = normalizeRange(String(req.query.range || "this_month"));
-    const data = await getDashboard(range);
+    const propertyGroupScope = String(req.query.propertyGroup || "configured");
+    const data = await getDashboard(range, propertyGroupScope);
     res.json(data);
   } catch (err) {
     console.error("[api] Dashboard error:", err);
@@ -138,13 +203,17 @@ app.get("/api/dashboard", async (req, res) => {
 app.get("/api/drilldown/:key", async (req, res) => {
   try {
     const { getDrilldown } = await import("./lib/aggregator.js");
-    const dd = await getDrilldown(req.params.key, normalizeRange(String(req.query.range || "this_month")));
+    const dd = await getDrilldown(req.params.key, normalizeRange(String(req.query.range || "this_month")), String(req.query.propertyGroup || "configured"));
     if (!dd) return res.status(404).json({ error: "Unknown drilldown: " + req.params.key });
     res.json(dd);
   } catch (err) {
     console.error("[api] Drilldown error:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get("/api/property-groups", (_req, res) => {
+  res.json({ groups: query("SELECT id, label, source_field FROM property_groups ORDER BY label") });
 });
 
 // ── API: Labor adjustments (PTO + off-AppFolio billable hours per tech) ────
@@ -197,7 +266,7 @@ app.post("/api/labor-adjustments", async (req, res) => {
 app.get("/api/team", async (req, res) => {
   try {
     const { getTeamQuarter } = await import("./lib/kpi.js");
-    res.json(getTeamQuarter(String(req.query.quarter || "")));
+    res.json(getTeamQuarter(String(req.query.quarter || ""), String(req.query.retroactive || "") === "1", String(req.query.propertyGroup || "configured")));
   } catch (err) {
     console.error("[api] Team error:", err);
     res.status(500).json({ error: err.message });
@@ -207,7 +276,7 @@ app.get("/api/team", async (req, res) => {
 app.get("/api/team/drilldown/:key", async (req, res) => {
   try {
     const { getTeamDrilldown } = await import("./lib/kpi.js");
-    const dd = getTeamDrilldown(req.params.key, String(req.query.quarter || ""));
+    const dd = getTeamDrilldown(req.params.key, String(req.query.quarter || ""), String(req.query.propertyGroup || "configured"));
     if (!dd) return res.status(404).json({ error: "Unknown drilldown: " + req.params.key });
     res.json(dd);
   } catch (err) {
@@ -218,32 +287,115 @@ app.get("/api/team/drilldown/:key", async (req, res) => {
 
 // Snapshot (lock) a quarter's results so retroactive AppFolio edits can't
 // change already-paid bonuses. Re-snapshotting overwrites with a new timestamp.
-app.post("/api/team/snapshot", async (req, res) => {
+app.post("/api/team/snapshot", requireSameOrigin, requireOwner, async (req, res) => {
   try {
     const { snapshotQuarter } = await import("./lib/kpi.js");
     const quarter = String((req.body && req.body.quarter) || "");
     if (!/^\d{4}-Q[1-4]$/.test(quarter)) return res.status(400).json({ error: "quarter must be YYYY-QN" });
-    res.json(snapshotQuarter(quarter));
+    res.json(snapshotQuarter(quarter, !!req.body.replaceExisting));
   } catch (err) {
     console.error("[api] Snapshot error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
 // KPI config editor (thresholds, payouts, active flags)
 app.get("/api/team/config", async (req, res) => {
+  if (!validOwnerSession(getCookie(req, OWNER_COOKIE))) return res.status(403).json({ error: "Owner sign-in required" });
   try {
-    const { seedKpiConfig } = await import("./lib/kpi.js");
+    const { seedKpiConfig, getTeamSettings } = await import("./lib/kpi.js");
     seedKpiConfig();
     const configs = query("SELECT * FROM kpi_config ORDER BY department, sort").map((c) => ({ ...c, tiers: JSON.parse(c.tiers || "{}") }));
     const roster = query("SELECT * FROM kpi_roster ORDER BY sort").map((r) => ({ ...r, allocations: JSON.parse(r.allocations || "{}") }));
-    res.json({ configs, roster });
+    const propertyGroups = query("SELECT id, label, source_field FROM property_groups ORDER BY label");
+    const vendorFields = new Set();
+    query("SELECT custom_fields FROM vendors WHERE custom_fields != ''").forEach((r) => {
+      try { Object.keys(JSON.parse(r.custom_fields || "{}")).forEach((k) => vendorFields.add(k)); } catch {}
+    });
+    res.json({ configs, roster, settings: getTeamSettings(), propertyGroups, vendorExemptionFields: [...vendorFields].sort(), vendorExemptionUnavailable: vendorFields.size === 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post("/api/team/config", async (req, res) => {
+app.get("/api/owner/session", (req, res) => {
+  res.json({ owner: validOwnerSession(getCookie(req, OWNER_COOKIE)) });
+});
+
+app.post("/api/owner/settings", requireSameOrigin, requireOwner, async (req, res) => {
+  try {
+    const { updateTeamSettings } = await import("./lib/kpi.js");
+    const patch = req.body || {};
+    if (patch.quarterly_incentive != null && (!Number.isFinite(Number(patch.quarterly_incentive)) || Number(patch.quarterly_incentive) < 0)) {
+      return res.status(400).json({ error: "quarterly_incentive must be a non-negative number" });
+    }
+    if (patch.stretch_bonus != null && (!Number.isFinite(Number(patch.stretch_bonus)) || Number(patch.stretch_bonus) < 0)) {
+      return res.status(400).json({ error: "stretch_bonus must be a non-negative number" });
+    }
+    if (patch.tier_payouts != null) {
+      const p = patch.tier_payouts;
+      if (!["good", "better", "best"].every((k) => Number.isFinite(Number(p[k])) && Number(p[k]) >= 0 && Number(p[k]) <= 1)) {
+        return res.status(400).json({ error: "tier_payouts must contain Good, Better, and Best values from 0 to 1" });
+      }
+    }
+    if (patch.discretionary_questions != null &&
+      (!Array.isArray(patch.discretionary_questions) || patch.discretionary_questions.length < 7 ||
+       patch.discretionary_questions.length > 10 || !patch.discretionary_questions.every((q) => typeof q === "string" && q.trim()))) {
+      return res.status(400).json({ error: "discretionary_questions must contain 7 to 10 non-empty questions" });
+    }
+    if (patch.discretionary_max_by_role != null &&
+      (typeof patch.discretionary_max_by_role !== "object" || Object.values(patch.discretionary_max_by_role)
+        .some((v) => !Number.isFinite(Number(v)) || Number(v) < 0))) {
+      return res.status(400).json({ error: "discretionary role maximums must be non-negative numbers" });
+    }
+    if (patch.bonus_eligible_property_group &&
+      !query("SELECT id FROM property_groups WHERE id = ?", [patch.bonus_eligible_property_group]).length) {
+      return res.status(400).json({ error: "Selected property group was not discovered in the verified AppFolio property directory" });
+    }
+    const settings = updateTeamSettings(patch);
+    clearDashboardCache();
+    res.json({ settings });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/owner/historical-adjustments", requireOwner, async (_req, res) => {
+  try {
+    const { historicalAdjustments } = await import("./lib/kpi.js");
+    res.json({ adjustments: historicalAdjustments() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/owner/scorecard", requireOwner, (req, res) => {
+  try {
+    const quarter = String(req.query.quarter || "");
+    if (!/^\d{4}-Q[1-4]$/.test(quarter)) return res.status(400).json({ error: "quarter must be YYYY-QN" });
+    const roster = query("SELECT id, name, role FROM kpi_roster WHERE active = 1 ORDER BY sort");
+    const reviews = query("SELECT employee_id, answers, updated_at FROM discretionary_reviews WHERE quarter = ?", [quarter])
+      .map((r) => ({ ...r, answers: JSON.parse(r.answers || "[]") }));
+    res.json({ quarter, roster, reviews });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/owner/scorecard", requireSameOrigin, requireOwner, (req, res) => {
+  try {
+    const { quarter, employee_id, answers } = req.body || {};
+    if (!/^\d{4}-Q[1-4]$/.test(String(quarter || ""))) return res.status(400).json({ error: "quarter must be YYYY-QN" });
+    if (!query("SELECT id FROM kpi_roster WHERE id = ? AND active = 1", [employee_id]).length) return res.status(404).json({ error: "Unknown active employee" });
+    if (!Array.isArray(answers) || !answers.every((a) => a === "na" || [0, 1, 2].includes(Number(a)))) {
+      return res.status(400).json({ error: "answers must be 0, 1, 2, or na" });
+    }
+    run(`INSERT INTO discretionary_reviews (quarter, employee_id, answers, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(quarter, employee_id) DO UPDATE SET answers = excluded.answers, updated_at = excluded.updated_at`,
+      [quarter, employee_id, JSON.stringify(answers), new Date().toISOString()]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/team/config", requireSameOrigin, requireOwner, async (req, res) => {
   try {
     const { id, tiers, active } = req.body || {};
     if (!id || typeof id !== "string") return res.status(400).json({ error: "id required" });
@@ -289,7 +441,7 @@ app.post("/api/team/config", async (req, res) => {
 });
 
 // Per-employee per-quarter scheduled-hours override (utilization denominator)
-app.post("/api/team/override", async (req, res) => {
+app.post("/api/team/override", requireSameOrigin, requireOwner, async (req, res) => {
   try {
     const { quarter, employee, scheduled_hours } = req.body || {};
     if (!/^\d{4}-Q[1-4]$/.test(String(quarter || ""))) return res.status(400).json({ error: "quarter must be YYYY-QN" });

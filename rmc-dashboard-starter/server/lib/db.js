@@ -5,7 +5,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, "..", "..", "data", "rmc.db");
+// Tests may point SQLite at an isolated temporary file; production continues
+// to use the persistent dashboard data path.
+const DB_PATH = process.env.RMC_DB_PATH || path.join(__dirname, "..", "..", "data", "rmc.db");
 
 let db;
 export function getDb() {
@@ -95,7 +97,7 @@ function migrate() {
     );
 
     -- Inspections (from inspection_detail report) — Building Walkthroughs
-    -- feed Mark's inspection KPI on the Team Performance tab.
+    -- feed the Team Performance inspection KPI.
     CREATE TABLE IF NOT EXISTS inspections (
       inspection_id TEXT PRIMARY KEY,
       inspection_name TEXT,
@@ -291,8 +293,24 @@ function migrate() {
       address TEXT, city TEXT, state TEXT, zip TEXT,
       unit_count INTEGER DEFAULT 0,
       property_type TEXT,
+      group_labels TEXT,
       synced_at TEXT
     );
+
+    -- Groups are discovered only from fields returned by AppFolio's verified
+    -- property_directory report. No group endpoint is guessed or invented.
+    CREATE TABLE IF NOT EXISTS property_groups (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      source_field TEXT NOT NULL,
+      synced_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS property_group_members (
+      group_id TEXT NOT NULL,
+      property_id TEXT NOT NULL,
+      PRIMARY KEY (group_id, property_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_property_group_members_property ON property_group_members(property_id);
 
     -- Security deposits (from security_deposit_funds_detail)
     CREATE TABLE IF NOT EXISTS security_deposits (
@@ -364,6 +382,20 @@ function migrate() {
       insurance_expiration TEXT,  -- YYYY-MM-DD
       synced_at TEXT
     );
+
+    -- Owner-editable program settings and owner-only discretionary reviews.
+    CREATE TABLE IF NOT EXISTS team_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS discretionary_reviews (
+      quarter TEXT NOT NULL,
+      employee_id TEXT NOT NULL,
+      answers TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (quarter, employee_id)
+    );
   `);
 
   // Additive columns on existing tables (ignore "duplicate column" errors).
@@ -375,7 +407,8 @@ function migrate() {
   addCol("vendors", "state_lic_expires", "TEXT");
   addCol("properties", "insurance_expiration", "TEXT");
   addCol("properties", "owners", "TEXT");
-  addCol("delinquency", "late_fee_policy", "TEXT");
+  addCol("properties", "group_labels", "TEXT");
+  addCol("vendors", "custom_fields", "TEXT");
   addCol("units", "rentable", "TEXT");
 }
 

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RMC Dashboard — Owner Sign In</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;display:grid;place-items:center;background:#FBF7F0;color:#1A1A1A;font:15px Outfit,Arial,sans-serif;padding:20px}
+    form{width:min(380px,100%);background:#fff;border:1px solid #EBE3D6;border-radius:14px;padding:32px;box-shadow:0 6px 24px #1a1a1a12}
+    h1{font-size:19px;margin:6px 0 8px}.eyebrow{font-size:11px;font-weight:700;letter-spacing:.12em;color:#8A8270;text-transform:uppercase}
+    p{color:#8A8270;font-size:13px;line-height:1.45} input,button{width:100%;font:inherit;border-radius:8px;padding:11px 12px}
+    input{border:1px solid #E4DCCD;margin:18px 0 12px;background:#FDFBF7}button{border:0;background:#1A1A1A;color:white;font-weight:600}.msg{min-height:18px;color:#C0392B;font-size:12px;margin-top:10px}
+  </style>
+</head>
+<body>
+  <form id="form"><div class="eyebrow">RMC Dashboard</div><h1>Owner sign in</h1>
+    <p>This unlocks owner-only KPI settings, frozen-quarter controls, and discretionary scorecards for this browser session.</p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Owner password" autofocus />
+    <button id="btn">Sign in as owner</button><div class="msg" id="msg"></div>
+  </form>
+  <script>
+    const form=document.querySelector("#form"),pw=document.querySelector("#pw"),btn=document.querySelector("#btn"),msg=document.querySelector("#msg");
+    form.addEventListener("submit",async(e)=>{e.preventDefault();btn.disabled=true;msg.textContent="";
+      try { const r=await fetch("/api/owner/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw.value})});
+        if(!r.ok) throw new Error((await r.json()).error||"Sign in failed"); location.replace("/"); }
+      catch(err){msg.textContent=err.message;pw.select();btn.disabled=false;}
+    });
+  </script>
+</body></html>

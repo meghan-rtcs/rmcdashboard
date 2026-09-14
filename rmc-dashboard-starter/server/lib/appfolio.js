@@ -168,7 +168,6 @@ export const appfolio = {
 
   // Delinquency
   delinquency: (body = {}) => fetchAll("delinquency.json", body),
-  lateFeePolicyComparison: (body = {}) => fetchAll("late_fee_policy_comparison.json", body),
   agedReceivablesDetail: (body = {}) => fetchAll("aged_receivables_detail.json", body),
   // AppFolio silently defaults this report to a short upcoming-expiration
   // window when no filters are supplied. Request a wide range so insurance

@@ -4,6 +4,7 @@
 // snapshots/locking, and per-KPI drilldowns. Nothing about thresholds or
 // payouts is hardcoded here — all definitions live in kpi_config / kpi_roster.
 import { query, queryOne, run } from "./db.js";
+import { DEFAULT_TEAM_SETTINGS, REQUIRED_KPI_DEFAULTS } from "./team-settings.js";
 
 const num = (v) => (v == null || isNaN(v) ? 0 : Number(v));
 const round = (v, d = 1) => {
@@ -44,9 +45,10 @@ export function normalizeQuarter(q) {
   return quarterBounds(q) ? q : currentQuarter();
 }
 export function listQuarters() {
-  // From 2025-Q1 through the current quarter, newest first.
+  // Keep the requested retroactive 2026 Q1–Q3 periods available even before
+  // the calendar reaches them; future periods are shown as unavailable.
   const out = [];
-  const cur = currentQuarter();
+  const cur = currentQuarter() > "2026-Q3" ? currentQuarter() : "2026-Q3";
   const [cy, cq] = cur.split("-Q").map(Number);
   for (let y = 2025; y <= cy; y++) {
     for (let qi = 1; qi <= 4; qi++) {
@@ -82,20 +84,82 @@ const NULL_TIERS = JSON.stringify({
   good: { threshold: null, payout: 0 }, better: { threshold: null, payout: 0 }, best: { threshold: null, payout: 0 },
 });
 
+export function getTeamSettings() {
+  const now = new Date().toISOString();
+  for (const [key, value] of Object.entries(DEFAULT_TEAM_SETTINGS)) {
+    run("INSERT OR IGNORE INTO team_settings (key, value, updated_at) VALUES (?, ?, ?)",
+      [key, JSON.stringify(value), now]);
+  }
+  const rows = many("SELECT key, value FROM team_settings");
+  const stored = Object.fromEntries(rows.map((r) => {
+    try { return [r.key, JSON.parse(r.value)]; } catch { return [r.key, r.value]; }
+  }));
+  return { ...DEFAULT_TEAM_SETTINGS, ...stored };
+}
+
+export function updateTeamSettings(patch) {
+  const current = getTeamSettings();
+  const allowed = new Set(Object.keys(DEFAULT_TEAM_SETTINGS));
+  for (const [key, value] of Object.entries(patch || {})) {
+    if (!allowed.has(key)) continue;
+    run(`INSERT INTO team_settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      [key, JSON.stringify(value), new Date().toISOString()]);
+  }
+  return getTeamSettings();
+}
+
 export function seedKpiConfig() {
   if (num(one("SELECT COUNT(*) c FROM kpi_roster").c) === 0) {
     const roster = [
       ["john", "John Fedele", "Senior Property Manager", { "Property Management": 1 }, 1],
-      ["mark", "Mark Felix", "Associate Property Manager", { "Property Management": 1 }, 2],
-      ["fabian", "Fabian Buenrostro", "Maintenance Coordinator", { "Property Management": 0.5, "Maintenance": 0.5 }, 3],
-      ["bong", "Lobrigo \"Bong\" Manasan", "Maintenance Technician", {}, 4],
-      ["scott", "Scott C. Scott", "Maintenance Technician", {}, 5],
-      ["melinda", "Melinda Greene", "Bookkeeper", { "Bookkeeping": 1 }, 6],
+      ["fabian", "Fabian Buenrostro", "Maintenance Coordinator", { "Property Management": 0.5, "Maintenance": 0.5 }, 2],
+      ["bong", "Lobrigo \"Bong\" Manasan", "Maintenance Technician", {}, 3],
+      ["scott", "Scott C. Scott", "Maintenance Technician", {}, 4],
+      ["melinda", "Melinda Greene", "Bookkeeper", { "Bookkeeping": 1 }, 5],
     ];
     for (const [id, name, role, alloc, sort] of roster) {
       run("INSERT INTO kpi_roster (id, name, role, allocations, active, sort) VALUES (?, ?, ?, ?, 1, ?)",
         [id, name, role, JSON.stringify(alloc), sort]);
     }
+  }
+  // Mark is removed from live configuration and live roster. Historical
+  // snapshot dollar amounts are intentionally not recalculated here.
+  run("DELETE FROM kpi_roster WHERE id = 'mark'");
+  run("UPDATE kpi_config SET assigned_to = 'john' WHERE id = 'pm_inspections'");
+  // Historical payouts are frozen. Remove the departed employee's personally
+  // identifying roster/KPI references from snapshot payloads without changing
+  // the other employees' frozen amounts or re-splitting any historical pool.
+  for (const row of many("SELECT quarter, payload FROM quarter_results")) {
+    try {
+      const payload = JSON.parse(row.payload);
+      const removed = (payload.employees || []).filter((e) => e.id === "mark");
+      let changed = removed.length > 0;
+      if (removed.length) {
+        payload.employees = payload.employees.filter((e) => e.id !== "mark");
+        payload.historicalUnallocatedBonus = round(num(payload.historicalUnallocatedBonus) +
+          removed.reduce((sum, e) => sum + num(e.earned), 0), 2);
+        payload.historicalAdjustment = "Retired share removed; remaining frozen employee amounts were not redistributed.";
+      }
+      for (const k of payload.kpis || []) {
+        if (k.assignedTo === "mark") {
+          k.assignedTo = "john"; k.assignedName = "John Fedele"; changed = true;
+        }
+      }
+      for (const d of payload.departments || []) {
+        if (Array.isArray(d.members)) {
+          const before = d.members.length;
+          d.members = d.members.filter((m) => m.id !== "mark");
+          changed ||= before !== d.members.length;
+        }
+        for (const k of d.individualKpis || []) {
+          if (k.assignedTo === "mark") {
+            k.assignedTo = "john"; k.assignedName = "John Fedele"; changed = true;
+          }
+        }
+      }
+      if (changed) run("UPDATE quarter_results SET payload = ? WHERE quarter = ?", [JSON.stringify(payload), row.quarter]);
+    } catch { /* never replace a malformed frozen snapshot */ }
   }
   if (num(one("SELECT COUNT(*) c FROM kpi_config").c) === 0) {
     // Payout dollar amounts are placeholders ($0) until the client provides
@@ -116,20 +180,20 @@ export function seedKpiConfig() {
       ["pm_days_to_lease", "Property Management", "Days to Lease",
         "Not yet configured — thresholds pending from client.",
         "department", null, "AppFolio", "lower_is_better", "days", NULL_TIERS, 0, 4],
-      // Property Management — individual (Mark)
+      // Property Management — individual (John; Scott/Bong are contributors)
       ["pm_inspections", "Property Management", "Building Inspections (Units Inspected)",
-        "Units credited from 'Building Walkthrough' inspections completed in the quarter (units inspected, not properties).",
-        "individual", "mark", "AppFolio inspection_detail report", "higher_is_better", "count",
-        T(125, 146, 182, 0, 0, 0), 1, 5],
+        "Average units inspected per month from Building Walkthroughs. John is accountable; Scott and Bong contribute.",
+        "individual", "john", "AppFolio inspection_detail report", "higher_is_better", "count",
+        T(40, 50, 60, 0, 0, 0), 1, 5],
       // Maintenance — department
-      ["mnt_clean_movein", "Maintenance", "Clean Move-in %",
-        "Percent of move-ins in the quarter with zero non-turnover work orders in the first 30 days.",
+      ["mnt_clean_movein", "Maintenance", "Move-ins with no work orders",
+        "Percent of bonus-eligible-group move-ins with zero non-turnover work orders in the first 30 days.",
         "department", null, "AppFolio work orders + rent roll", "higher_is_better", "percent",
         T(70, 80, 90, 0, 0, 0), 1, 1],
       ["mnt_wo_30days", "Maintenance", "Work Orders Completed ≤ 30 Days",
         "Percent of work orders completed in the quarter that were closed within 30 days of creation.",
         "department", null, "AppFolio work orders", "higher_is_better", "percent",
-        T(75, 85, 95, 0, 0, 0), 1, 2],
+        T(80, 90, 95, 0, 0, 0), 1, 2],
       ["mnt_wo_ttc", "Maintenance", "Work Order Time to Completion",
         "Not yet configured — thresholds pending from client.",
         "department", null, "AppFolio work order timestamps", "lower_is_better", "days", NULL_TIERS, 0, 3],
@@ -144,8 +208,8 @@ export function seedKpiConfig() {
         T(75, 85, 95, 0, 0, 0), 1, 5],
       // Bookkeeping — department (all thresholds TBD from client)
       ["bk_delinquent_rent", "Bookkeeping", "Delinquent Rent (Rent Only)",
-        "Outstanding rent charges only — utility billbacks and other charges excluded (config-driven charge-type list).",
-        "department", null, "AppFolio aged receivables (rent charges)", "lower_is_better", "currency", NULL_TIERS, 1, 1],
+        "Month-end rent-only delinquency as a percent of monthly rent; utilities and other charges excluded.",
+        "department", null, "AppFolio aged receivables (rent charges)", "lower_is_better", "percent", T(10, 5, 2, 0, 0, 0), 1, 1],
       ["bk_vendor_ins", "Bookkeeping", "Vendor Insurance Current %",
         "Percent of active vendors (do-not-use excluded) with an unexpired liability policy.",
         "department", null, "AppFolio vendor directory", "higher_is_better", "percent", NULL_TIERS, 1, 2],
@@ -159,6 +223,25 @@ export function seedKpiConfig() {
         [id, dept, label, desc, scope, assigned, src, dir, unit, tiers, active, "2026-Q3", sort]);
     }
   }
+  // Mandatory client thresholds are applied to existing starter configuration.
+  // Dollar payouts are intentionally not stored per KPI: the program splits
+  // the owner's configurable quarterly amount evenly across weighted KPIs.
+  if (!one("SELECT value FROM app_state WHERE key = 'kpi_thresholds_v2'").value) {
+    for (const [id, thresholds] of Object.entries(REQUIRED_KPI_DEFAULTS)) {
+      const c = one("SELECT tiers FROM kpi_config WHERE id = ?", [id]);
+      if (!c.tiers) continue;
+      const old = JSON.parse(c.tiers || "{}");
+      const tiers = Object.fromEntries(["good", "better", "best"].map((tier) => [
+        tier, { threshold: thresholds[tier], payout: num(old[tier]?.payout) },
+      ]));
+      run("UPDATE kpi_config SET tiers = ? WHERE id = ?", [JSON.stringify(tiers), id]);
+    }
+    run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('kpi_thresholds_v2', '1')");
+  }
+  run("UPDATE kpi_config SET label = ?, description = ?, assigned_to = 'john' WHERE id = 'pm_inspections'",
+    ["Building Inspections (Units / Month)", "Average units inspected each month from Building Walkthroughs. John is accountable; Scott and Bong are contributors."]);
+  run("UPDATE kpi_config SET label = ?, description = ? WHERE id = 'mnt_clean_movein'",
+    ["Move-ins with no work orders", "Percent of move-ins in the owner-selected bonus-eligible property group with zero non-turnover work orders in the first 30 days."]);
 }
 
 // ── KPI value computation ───────────────────────────────────────────────────
@@ -214,7 +297,15 @@ function kpiOwnerInsurance() {
   };
 }
 
-function kpiCleanMoveIn(qs, qe) {
+function selectedGroupClause(alias, groupId) {
+  if (!groupId) return { sql: "", params: [] };
+  const group = one("SELECT label FROM property_groups WHERE id = ?", [groupId]);
+  if (!group.label) return { sql: " AND 1 = 0", params: [] };
+  return { sql: ` AND EXISTS (SELECT 1 FROM property_group_members pgm WHERE pgm.group_id = ? AND pgm.property_id = ${alias}.id)`, params: [groupId] };
+}
+
+function kpiCleanMoveIn(qs, qe, settings) {
+  const group = selectedGroupClause("p", settings.bonus_eligible_property_group);
   const rows = many(
     `SELECT u.id, SUM(CASE WHEN w.id IS NOT NULL AND NOT ${TURNOVER_WO} THEN 1 ELSE 0 END) wo_count
      FROM units u
@@ -222,9 +313,10 @@ function kpiCleanMoveIn(qs, qe) {
        ON w.unit_id = u.id AND w.created_date != ''
       AND w.created_date >= u.move_in_date
       AND w.created_date <= date(u.move_in_date, '+30 days')
-     WHERE u.move_in_date >= ? AND u.move_in_date < ? AND ${REVENUE_UNIT}
+      LEFT JOIN properties p ON p.id = u.property_id
+      WHERE u.move_in_date >= ? AND u.move_in_date < ? AND ${REVENUE_UNIT}${group.sql}
      GROUP BY u.id`,
-    [qs, qe]
+    [qs, qe, ...group.params]
   );
   const clean = rows.filter((r) => num(r.wo_count) === 0).length;
   return {
@@ -238,8 +330,9 @@ function kpiWo30Days(qs, qe) {
     `SELECT COUNT(*) total,
             SUM(CASE WHEN julianday(completed_date) - julianday(created_date) <= 30 THEN 1 ELSE 0 END) fast
      FROM work_orders
-     WHERE completed_date != '' AND created_date != '' AND completed_date >= created_date
-       AND completed_date >= ? AND completed_date < ?`,
+      WHERE completed_date != '' AND created_date != '' AND completed_date >= created_date
+        AND completed_date >= ? AND completed_date < ?
+        AND (LOWER(COALESCE(assigned_user,'')) LIKE '%bong%' OR LOWER(COALESCE(assigned_user,'')) LIKE '%scott%')`,
     [qs, qe]
   );
   // Data-quality: work orders stuck in New/Assigned for 30+ days suggest
@@ -253,7 +346,7 @@ function kpiWo30Days(qs, qe) {
      WHERE status NOT IN ('Completed','Canceled','Completed No Need To Bill')`).c);
   return {
     value: num(r.total) ? round((num(r.fast) / num(r.total)) * 100) : null,
-    detail: num(r.fast) + " of " + num(r.total) + " completed within 30 days",
+    detail: num(r.fast) + " of " + num(r.total) + " in-house (Bong/Scott) work orders completed within 30 days",
     dataQuality: open > 0 && stuck / open > 0.3
       ? stuck + " open work orders have sat in New/Assigned for 30+ days — status data may be unreliable." : null,
   };
@@ -346,10 +439,11 @@ function kpiInspections(qs, qe) {
     [qs, qe]
   );
   const units = rows.reduce((s, r) => s + num(r.unit_count), 0);
+  const months = Math.max(1, Math.round((new Date(qe) - new Date(qs)) / 2629800000));
   const zeroCount = rows.filter((r) => num(r.unit_count) === 0).length;
   return {
-    value: rows.length ? units : (rows.length === 0 ? 0 : units),
-    detail: units + " units across " + rows.length + " properties inspected",
+    value: rows.length ? round(units / months, 1) : 0,
+    detail: units + " units across " + rows.length + " properties inspected (" + round(units / months, 1) + "/month); contributors: Scott and Bong",
     dataQuality: zeroCount > 0
       ? zeroCount + " inspected propert" + (zeroCount === 1 ? "y has" : "ies have") + " no unit count on file — units may be under-credited." : null,
   };
@@ -359,14 +453,29 @@ function kpiDelinquentRent() {
   // Rent-only delinquency: utility billbacks and other non-rent charge types
   // excluded by construction (receivable_charges categorizes each charge).
   const r = one("SELECT SUM(amount_receivable) s, COUNT(DISTINCT COALESCE(NULLIF(occupancy_id,''), payer_name)) c FROM receivable_charges WHERE charge_category = 'Rent'");
-  return { value: round(num(r.s), 2), detail: num(r.c) + " accounts owing rent" };
+  const rent = num(one("SELECT SUM(current_rent) s FROM units WHERE current_rent > 0").s);
+  return { value: rent ? round((num(r.s) / rent) * 100, 2) : null,
+    detail: num(r.c) + " accounts owing rent; " + (rent ? "$" + round(num(r.s), 2) + " / $" + round(rent, 2) + " monthly rent" : "monthly rent denominator unavailable"),
+    dataQuality: "Provisional current-state reading — capture a locked month-end/quarter-end result before treating delinquency as final." };
 }
 
-function kpiVendorIns() {
-  const total = num(one("SELECT COUNT(*) c FROM vendors WHERE status != 'do_not_use'").c);
-  const current = num(one(
-    "SELECT COUNT(*) c FROM vendors WHERE status != 'do_not_use' AND COALESCE(liability_expires,'') != '' AND date(liability_expires) >= date('now')").c);
-  return { value: total ? round((current / total) * 100) : null, detail: current + " of " + total + " active vendors current" };
+function kpiVendorIns(settings) {
+  const vendors = many("SELECT liability_expires, custom_fields FROM vendors WHERE status != 'do_not_use'");
+  const customKey = String(settings.vendor_exemption_field || "");
+  const isExempt = (v) => {
+    const overTenYears = v.liability_expires && new Date(v.liability_expires) > new Date(Date.now() + 10 * 365.25 * 86400000);
+    let custom = false;
+    try {
+      const value = JSON.parse(v.custom_fields || "{}")[customKey];
+      custom = value === true || value === 1 || ["yes", "true", "1", "y"].includes(String(value || "").trim().toLowerCase());
+    } catch {}
+    return overTenYears || custom;
+  };
+  const exempt = vendors.filter(isExempt).length;
+  const counted = vendors.filter((v) => !isExempt(v));
+  const current = counted.filter((v) => v.liability_expires && new Date(v.liability_expires) >= new Date()).length;
+  return { value: counted.length ? round((current / counted.length) * 100) : null,
+    detail: current + " of " + counted.length + " active vendors current; " + exempt + " exempt" };
 }
 
 function kpiRentersIns() {
@@ -382,19 +491,19 @@ const COMPUTERS = {
   pm_days_on_market: () => ({ value: null, detail: "Not yet configured" }),
   pm_days_to_lease: () => ({ value: null, detail: "Not yet configured" }),
   pm_inspections: (qs, qe) => kpiInspections(qs, qe),
-  mnt_clean_movein: (qs, qe) => kpiCleanMoveIn(qs, qe),
+  mnt_clean_movein: (qs, qe, q, emp, settings) => kpiCleanMoveIn(qs, qe, settings),
   mnt_wo_30days: (qs, qe) => kpiWo30Days(qs, qe),
   mnt_wo_ttc: () => ({ value: null, detail: "Not yet configured" }),
   mnt_util_bong: (qs, qe, q, emp) => kpiUtilization(qs, qe, q, emp),
   mnt_util_scott: (qs, qe, q, emp) => kpiUtilization(qs, qe, q, emp),
   bk_delinquent_rent: () => kpiDelinquentRent(),
-  bk_vendor_ins: () => kpiVendorIns(),
+  bk_vendor_ins: (qs, qe, q, emp, settings) => kpiVendorIns(settings),
   bk_renters_ins: () => kpiRentersIns(),
 };
 
 // ── Tier scoring ────────────────────────────────────────────────────────────
 
-function scoreTier(value, tiers, direction) {
+export function scoreTier(value, tiers, direction, strict = false) {
   // Highest tier whose threshold is met, respecting direction. Null thresholds
   // = not configured → no tier, no payout.
   if (value == null) return { tier: null, payout: 0 };
@@ -402,7 +511,7 @@ function scoreTier(value, tiers, direction) {
   for (const t of order) {
     const th = tiers[t] && tiers[t].threshold;
     if (th == null) continue;
-    const met = direction === "lower_is_better" ? value <= th : value >= th;
+    const met = direction === "lower_is_better" ? (strict ? value < th : value <= th) : value >= th;
     if (met) return { tier: t, payout: num(tiers[t].payout) };
   }
   return { tier: "none", payout: 0 };
@@ -410,8 +519,19 @@ function scoreTier(value, tiers, direction) {
 
 // ── Full quarter computation ────────────────────────────────────────────────
 
-export function computeTeamQuarter(quarter) {
+export function incentiveShares(total, count) {
+  if (!count) return [];
+  const cents = Math.round(num(total) * 100);
+  const base = Math.floor(cents / count);
+  const remainder = cents - base * count;
+  return Array.from({ length: count }, (_, index) => (base + (index < remainder ? 1 : 0)) / 100);
+}
+
+export function computeTeamQuarter(quarter, propertyGroupScope = "configured") {
   seedKpiConfig();
+  const settings = { ...getTeamSettings() };
+  if (propertyGroupScope === "all") settings.bonus_eligible_property_group = "";
+  else if (propertyGroupScope && propertyGroupScope !== "configured") settings.bonus_eligible_property_group = propertyGroupScope;
   quarter = normalizeQuarter(quarter);
   const [qs, qe] = quarterBounds(quarter);
   const roster = many("SELECT * FROM kpi_roster WHERE active = 1 ORDER BY sort").map((r) => ({
@@ -438,24 +558,23 @@ export function computeTeamQuarter(quarter) {
           dataQuality: "This KPI reflects live AppFolio state. Snapshot each quarter before it closes to preserve its value." };
       } else {
         const fn = COMPUTERS[c.id];
-        comp = fn ? fn(qs, qe, quarter, emp ? emp.name : null) : { value: null, detail: "No computation wired for this KPI" };
+        comp = fn ? fn(qs, qe, quarter, emp ? emp.name : null, settings) : { value: null, detail: "No computation wired for this KPI" };
       }
     }
     const configured = ["good", "better", "best"].some((t) => c.tiers[t] && c.tiers[t].threshold != null);
-    const { tier, payout } = c.active && configured ? scoreTier(comp.value, c.tiers, c.direction) : { tier: null, payout: 0 };
-    const maxPayout = configured ? Math.max(...["good", "better", "best"].map((t) => num(c.tiers[t] && c.tiers[t].payout))) : 0;
+    const { tier } = c.active && configured ? scoreTier(comp.value, c.tiers, c.direction, c.id === "bk_delinquent_rent") : { tier: null };
     return {
       id: c.id, department: c.department, label: c.label, description: c.description,
       scope: c.scope, assignedTo: c.assigned_to, assignedName: emp ? emp.name : null,
       dataSource: c.data_source, direction: c.direction, unit: c.unit,
       tiers: c.tiers, active: !!c.active, configured,
       value: comp.value, detail: comp.detail || null, dataQuality: comp.dataQuality || null,
-      tier, payout: round(payout, 2), maxPayout: round(maxPayout, 2),
+      tier, payout: 0, maxPayout: 0,
       drill: "team_" + c.id,
     };
   });
 
-  // Department rollups with share-weighted member splits
+  // Department rollups identify which employees receive each shared result.
   const deptNames = [...new Set(configs.map((c) => c.department))];
   const departments = deptNames.map((dept) => {
     const deptKpis = kpis.filter((k) => k.department === dept && k.scope === "department");
@@ -464,34 +583,63 @@ export function computeTeamQuarter(quarter) {
       .map((r) => ({ id: r.id, name: r.name, weight: num(r.allocations[dept]) }));
     const totalWeight = members.reduce((s, m) => s + m.weight, 0);
     members.forEach((m) => { m.share = totalWeight ? round(m.weight / totalWeight, 4) : 0; });
-    const earned = deptKpis.reduce((s, k) => s + k.payout, 0);
-    const max = deptKpis.reduce((s, k) => s + k.maxPayout, 0);
-    return { department: dept, kpis: deptKpis, individualKpis: indKpis, members,
-      earned: round(earned, 2), max: round(max, 2) };
+    return { department: dept, kpis: deptKpis, individualKpis: indKpis, members, earned: 0, max: 0 };
   });
 
-  // Per-employee earnings
+  // Per-employee bonuses: at most four weighted KPI results, all weighted
+  // equally. Department results apply to each department member, rather than
+  // being a share-weighted pool. Extra configured results are visible as
+  // expectations but cannot silently inflate the quarterly incentive.
   const employees = roster.map((r) => {
-    const breakdown = [];
-    let earned = 0, max = 0;
+    const candidates = [];
     for (const d of departments) {
       const m = d.members.find((x) => x.id === r.id);
       if (!m) continue;
-      const share = m.share;
       for (const k of d.kpis) {
-        breakdown.push({ kpi: k.label, department: d.department, type: "department",
-          share, payout: round(k.payout * share, 2), maxPayout: round(k.maxPayout * share, 2), tier: k.tier });
-        earned += k.payout * share; max += k.maxPayout * share;
+        if (k.active && k.configured) candidates.push({ ...k, type: "department" });
       }
     }
     for (const k of kpis.filter((x) => x.scope === "individual" && x.assignedTo === r.id)) {
-      breakdown.push({ kpi: k.label, department: k.department, type: "individual",
-        share: 1, payout: k.payout, maxPayout: k.maxPayout, tier: k.tier });
-      earned += k.payout; max += k.maxPayout;
+      if (k.active && k.configured) candidates.push({ ...k, type: "individual" });
     }
+    const weighted = candidates.slice(0, 4);
+    const expectations = candidates.slice(4);
+    const possibleShares = incentiveShares(settings.quarterly_incentive, weighted.length);
+    const payouts = settings.tier_payouts || {};
+    const breakdown = weighted.map((k, index) => ({
+      kpi: k.label, department: k.department, type: k.type, share: 1,
+      tier: k.tier, payout: round(possibleShares[index] * num(payouts[k.tier]), 2),
+      maxPayout: possibleShares[index],
+    }));
+    const earned = breakdown.reduce((s, b) => s + b.payout, 0);
+    const max = breakdown.reduce((s, b) => s + b.maxPayout, 0);
     return { id: r.id, name: r.name, role: r.role, allocations: r.allocations,
-      earned: round(earned, 2), max: round(max, 2), breakdown };
+      earned: round(earned, 2), max: round(max, 2), breakdown,
+      weightedKpiCount: weighted.length,
+      expectations: expectations.map((k) => ({ kpi: k.label, tier: k.tier, department: k.department })),
+      quarterlyIncentive: num(settings.quarterly_incentive),
+      ytdEarned: round(earned, 2),
+      ytdPossible: round(max, 2),
+      stretch: { status: "pending", eligible: false, reason: "Historical quarter snapshots are required." },
+    };
   });
+
+  // Add prior locked 2026 results to YTD. Old-format snapshots are deliberately
+  // not reinterpreted as new payouts; they remain frozen and are called out.
+  const prior = many("SELECT quarter, payload FROM quarter_results WHERE quarter LIKE ? AND quarter < ?", [`${quarter.slice(0, 4)}-Q%`, quarter]);
+  for (const s of prior) {
+    try {
+      const old = JSON.parse(s.payload);
+      for (const e of employees) {
+        const oldEmp = (old.employees || []).find((x) => x.id === e.id);
+        if (oldEmp && Number.isFinite(Number(oldEmp.earned))) {
+          e.ytdEarned = round(e.ytdEarned + num(oldEmp.earned), 2);
+          e.ytdPossible = round(e.ytdPossible + num(oldEmp.max), 2);
+        }
+      }
+    } catch { /* corrupted snapshot remains unavailable rather than invented */ }
+  }
+  for (const e of employees) e.stretch = stretchStatus(e.id, quarter.slice(0, 4), settings);
 
   // Google Sheet ("other billable hours") sync health + quarter totals for
   // the audit view — the UI must show failures visibly, never silently.
@@ -511,32 +659,123 @@ export function computeTeamQuarter(quarter) {
     isCurrent: quarter === currentQuarter(),
     computedAt: new Date().toISOString(),
     snapshot: null,
+    settings: { quarterlyIncentive: num(settings.quarterly_incentive), stretchBonus: num(settings.stretch_bonus), tierPayouts: settings.tier_payouts },
     sheetSync,
     kpis, departments, employees,
     quarters: listQuarters(),
   };
 }
 
+// Re-score captured historical values against the current thresholds. Snapshot
+// values are the historical evidence; no live current-state metric is used to
+// fabricate a prior period. The original locked payout is not returned as a
+// retroactive score.
+function rescoreSnapshot(payload, quarter, settings = getTeamSettings()) {
+  const data = JSON.parse(JSON.stringify(payload));
+  const configs = new Map(many("SELECT * FROM kpi_config").map((c) => [c.id, { ...c, tiers: JSON.parse(c.tiers || "{}") }]));
+  data.kpis = (data.kpis || []).map((k) => {
+    const c = configs.get(k.id);
+    if (!c) return { ...k, tier: null, dataQuality: "Historical KPI definition is no longer available." };
+    const tier = k.value == null ? null : scoreTier(k.value, c.tiers, c.direction, c.id === "bk_delinquent_rent").tier;
+    return { ...k, label: c.label, description: c.description, direction: c.direction, unit: c.unit, tiers: c.tiers,
+      configured: !!c.active && ["good", "better", "best"].some((t) => c.tiers[t]?.threshold != null),
+      active: !!c.active, tier, payout: 0, maxPayout: 0,
+      dataQuality: k.value == null ? (k.dataQuality || "Unavailable historical point-in-time metric.") : k.dataQuality };
+  });
+  const byId = new Map(data.kpis.map((k) => [k.id, k]));
+  data.departments = (data.departments || []).map((d) => ({
+    ...d,
+    kpis: (d.kpis || []).map((k) => byId.get(k.id) || k),
+    individualKpis: (d.individualKpis || []).map((k) => byId.get(k.id) || k),
+  }));
+  data.employees = (data.employees || []).map((employee) => {
+    const candidates = data.kpis.filter((k) => k.active && k.configured &&
+      ((k.scope === "individual" && k.assignedTo === employee.id) ||
+        (k.scope === "department" && num((employee.allocations || {})[k.department]) > 0)))
+      .slice(0, 4);
+    const possibleShares = incentiveShares(settings.quarterly_incentive, candidates.length);
+    const breakdown = candidates.map((k, index) => ({
+      kpi: k.label, department: k.department, type: k.scope, tier: k.tier, share: 1,
+      payout: round(possibleShares[index] * num(settings.tier_payouts?.[k.tier]), 2), maxPayout: possibleShares[index],
+    }));
+    return { ...employee, breakdown, weightedKpiCount: candidates.length,
+      expectations: [], earned: round(breakdown.reduce((s, b) => s + b.payout, 0), 2),
+      max: round(breakdown.reduce((s, b) => s + b.maxPayout, 0), 2),
+      ytdEarned: round(breakdown.reduce((s, b) => s + b.payout, 0), 2),
+      ytdPossible: round(breakdown.reduce((s, b) => s + b.maxPayout, 0), 2) };
+  });
+  data.retroactive = true;
+  data.retroactiveNotice = "Historical captured values have been re-scored using current thresholds. Missing point-in-time values remain unavailable.";
+  return data;
+}
+
+function stretchStatus(employeeId, year, settings) {
+  const expected = [1, 2, 3, 4].map((n) => `${year}-Q${n}`);
+  const snapshots = new Map(many("SELECT quarter, payload FROM quarter_results WHERE quarter LIKE ?", [`${year}-Q%`]).map((r) => [r.quarter, r.payload]));
+  const results = [];
+  for (const quarter of expected) {
+    const raw = snapshots.get(quarter);
+    if (!raw) return { status: "pending", eligible: false, reason: `${quarter} has no locked snapshot.` };
+    try {
+      const e = rescoreSnapshot(JSON.parse(raw), quarter, settings).employees.find((x) => x.id === employeeId);
+      if (!e || !Array.isArray(e.breakdown) || !e.breakdown.length) return { status: "pending", eligible: false, reason: `${quarter} has no complete KPI result.` };
+      if (e.breakdown.some((b) => b.tier == null)) return { status: "pending", eligible: false, reason: `${quarter} contains an unavailable KPI result.` };
+      results.push(...e.breakdown);
+    } catch { return { status: "pending", eligible: false, reason: `${quarter} snapshot cannot be evaluated.` }; }
+  }
+  if (results.some((b) => b.tier === "good" || b.tier === "none")) {
+    return { status: "not eligible", eligible: false, reason: "A Good or Below Good KPI result disqualifies the stretch bonus." };
+  }
+  const bestRatio = results.filter((b) => b.tier === "best").length / results.length;
+  return bestRatio >= num(settings.stretch_best_ratio)
+    ? { status: "eligible", eligible: true, bestRatio: round(bestRatio * 100, 1), amount: num(settings.stretch_bonus) }
+    : { status: "not eligible", eligible: false, bestRatio: round(bestRatio * 100, 1), reason: "Fewer than " + (num(settings.stretch_best_ratio) * 100) + "% of KPI-quarter results are Best." };
+}
+
 // ── Snapshots (quarter locking) ─────────────────────────────────────────────
 
-export function getTeamQuarter(quarter) {
+export function getTeamQuarter(quarter, retroactive = false, propertyGroupScope = "configured") {
+  seedKpiConfig();
   quarter = normalizeQuarter(quarter);
   const snap = one("SELECT payload, snapshot_at FROM quarter_results WHERE quarter = ?", [quarter]);
   if (snap.payload && quarter !== currentQuarter()) {
-    const data = JSON.parse(snap.payload);
+    const data = retroactive ? rescoreSnapshot(JSON.parse(snap.payload), quarter) : JSON.parse(snap.payload);
+    delete data.historicalUnallocatedBonus;
+    delete data.historicalAdjustment;
     data.snapshot = { at: snap.snapshot_at, locked: true };
     data.quarters = listQuarters();
+    if (retroactive) {
+      data.employees.forEach((e) => { e.stretch = stretchStatus(e.id, quarter.slice(0, 4), getTeamSettings()); });
+    }
     return data;
   }
-  const data = computeTeamQuarter(quarter);
+  const data = computeTeamQuarter(quarter, propertyGroupScope);
   if (snap.payload) data.snapshot = { at: snap.snapshot_at, locked: false }; // current quarter: snapshot exists but live shown
   else if (!data.isCurrent) data.notLocked = true; // historical, never snapshotted
   return data;
 }
 
-export function snapshotQuarter(quarter) {
+export function historicalAdjustments() {
+  return many("SELECT quarter, payload FROM quarter_results ORDER BY quarter").flatMap((row) => {
+    try {
+      const payload = JSON.parse(row.payload);
+      return num(payload.historicalUnallocatedBonus) > 0 ? [{
+        quarter: row.quarter,
+        amount: num(payload.historicalUnallocatedBonus),
+        note: payload.historicalAdjustment || "Retired share was not redistributed.",
+      }] : [];
+    } catch { return []; }
+  });
+}
+
+export function snapshotQuarter(quarter, replaceExisting = false) {
   quarter = normalizeQuarter(quarter);
   if (quarter > currentQuarter()) throw new Error("Cannot snapshot a future quarter");
+  if (quarter !== currentQuarter() && one("SELECT quarter FROM quarter_results WHERE quarter = ?", [quarter]).quarter && !replaceExisting) {
+    const err = new Error("Closed quarter is already locked. Explicit owner replacement is required.");
+    err.statusCode = 409;
+    throw err;
+  }
   const data = computeTeamQuarter(quarter);
   run(`INSERT INTO quarter_results (quarter, payload, snapshot_at) VALUES (?, ?, ?)
        ON CONFLICT(quarter) DO UPDATE SET payload = excluded.payload, snapshot_at = excluded.snapshot_at`,
@@ -547,10 +786,13 @@ export function snapshotQuarter(quarter) {
 // ── Drilldowns ──────────────────────────────────────────────────────────────
 
 const LIM = 500;
-export function getTeamDrilldown(key, quarter) {
+export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured") {
   seedKpiConfig();
   quarter = normalizeQuarter(quarter);
   const [qs, qe] = quarterBounds(quarter);
+  const settings = { ...getTeamSettings() };
+  if (propertyGroupScope === "all") settings.bonus_eligible_property_group = "";
+  else if (propertyGroupScope && propertyGroupScope !== "configured") settings.bonus_eligible_property_group = propertyGroupScope;
   const id = key.replace(/^team_/, "");
   const mk = (title, cols, rows) => ({ title: title + " — " + quarter, cols, rows });
   switch (id) {
@@ -617,11 +859,12 @@ export function getTeamDrilldown(key, quarter) {
           `SELECT u.property_name, u.unit_name, u.tenant_name, u.move_in_date,
                   SUM(CASE WHEN w.id IS NOT NULL AND NOT ${TURNOVER_WO} THEN 1 ELSE 0 END) wo_count,
                   CASE WHEN SUM(CASE WHEN w.id IS NOT NULL AND NOT ${TURNOVER_WO} THEN 1 ELSE 0 END) = 0 THEN 'Yes' ELSE 'No' END clean
-           FROM units u
+            FROM units u
            LEFT JOIN work_orders w ON w.unit_id = u.id AND w.created_date != ''
              AND w.created_date >= u.move_in_date AND w.created_date <= date(u.move_in_date, '+30 days')
-           WHERE u.move_in_date >= ? AND u.move_in_date < ? AND ${REVENUE_UNIT}
-           GROUP BY u.id ORDER BY u.move_in_date DESC LIMIT ${LIM}`, [qs, qe]));
+            LEFT JOIN properties p ON p.id = u.property_id
+            WHERE u.move_in_date >= ? AND u.move_in_date < ? AND ${REVENUE_UNIT}${selectedGroupClause("p", settings.bonus_eligible_property_group).sql}
+            GROUP BY u.id ORDER BY u.move_in_date DESC LIMIT ${LIM}`, [qs, qe, ...selectedGroupClause("p", settings.bonus_eligible_property_group).params]));
     case "mnt_wo_30days":
       return mk("Work Orders Completed in Quarter", [
         { key: "property_name", label: "Property" }, { key: "unit", label: "Unit" },
@@ -633,6 +876,7 @@ export function getTeamDrilldown(key, quarter) {
            FROM work_orders
            WHERE completed_date != '' AND created_date != '' AND completed_date >= created_date
              AND completed_date >= ? AND completed_date < ?
+              AND (LOWER(COALESCE(assigned_user,'')) LIKE '%bong%' OR LOWER(COALESCE(assigned_user,'')) LIKE '%scott%')
            ORDER BY days DESC LIMIT ${LIM}`, [qs, qe]));
     case "sheet_hours": {
       // Audit/reconciliation view: every sheet row in the quarter with its
@@ -673,10 +917,23 @@ export function getTeamDrilldown(key, quarter) {
               FROM receivable_charges WHERE charge_category = 'Rent' AND amount_receivable != 0
               ORDER BY amount_receivable DESC LIMIT ${LIM}`));
     case "bk_vendor_ins":
+      {
+        const key = String(settings.vendor_exemption_field || "");
+        const rows = many(`SELECT vendor_name, liability_expires, status, custom_fields FROM vendors WHERE status != 'do_not_use'`)
+          .filter((v) => {
+            const dateExempt = v.liability_expires && new Date(v.liability_expires) > new Date(Date.now() + 10 * 365.25 * 86400000);
+            let custom = false;
+            try {
+              const value = JSON.parse(v.custom_fields || "{}")[key];
+              custom = value === true || value === 1 || ["yes", "true", "1", "y"].includes(String(value || "").trim().toLowerCase());
+            } catch {}
+            return !dateExempt && !custom;
+          }).sort((a, b) => String(a.liability_expires || "9999").localeCompare(String(b.liability_expires || "9999"))).slice(0, LIM);
       return mk("Vendors — Liability Insurance", [
         { key: "vendor_name", label: "Vendor" }, { key: "liability_expires", label: "Liability Expires" },
         { key: "status", label: "Status" }],
-        many(`SELECT vendor_name, liability_expires, status FROM vendors WHERE status != 'do_not_use' ORDER BY COALESCE(NULLIF(liability_expires,''),'9999') LIMIT ${LIM}`));
+        rows);
+      }
     case "bk_renters_ins":
       return mk("Current Tenants — Renter's Insurance", [
         { key: "tenant_name", label: "Tenant" }, { key: "property_name", label: "Property" },

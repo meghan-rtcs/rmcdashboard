@@ -5,6 +5,26 @@ import { getDb, clearTable, upsertMany, run, query } from "./db.js";
 const TS = () => new Date().toISOString();
 const safe = (p, fb) => p.catch(e => { console.warn("[sync] non-fatal:", e.message); return fb; });
 
+// property_directory is the verified source. AppFolio exposes group IDs, not
+// official names, in this account, so IDs are shown transparently rather than
+// inventing a label or guessing another report endpoint.
+export function propertyGroupValues(record) {
+  return Object.entries(record).flatMap(([key, value]) => {
+    if (value == null || value === "") return [];
+    if (/^property_group_id$/i.test(key)) {
+      return String(value).split(/\s*,\s*/).filter(Boolean).map((id) => ({
+        id: String(id).trim(), label: `AppFolio group ${String(id).trim()}`, field: key,
+      }));
+    }
+    if (!/^(property_)?groups?(_name)?$/i.test(key)) return [];
+    const values = Array.isArray(value) ? value : String(value).split(/\s*,\s*/);
+    return values.filter(Boolean).map((item) => {
+      const label = String(typeof item === "object" ? (item.name || item.label || "") : item).trim();
+      return label ? { id: label, label, field: key } : null;
+    }).filter(Boolean);
+  });
+}
+
 export async function syncAll() {
   const start = Date.now();
   const errors = [];
@@ -84,53 +104,11 @@ export async function syncAll() {
     console.log(`[sync] Unit directory overlay: ${n} units (rentable/tags), ${added} directory-only units added`);
   } catch (e) { errors.push(`unit_directory: ${e.message}`); console.error("[sync]", e.message); }
 
-  // ── 2. Delinquency (+ late fee policy resolution) ───────────────────────
+  // ── 2. Delinquency ──────────────────────────────────────────────────────
   try {
-    // Each delinquent occupancy is tagged with its active late fee policy from
-    // the late_fee_policy_comparison report: occupancy-level overrides win over
-    // property-level defaults; among duplicates the latest effective_date wins.
-    const [rows, policyRows] = await Promise.all([
-      appfolio.delinquency(),
-      appfolio.lateFeePolicyComparison().catch((e) => {
-        console.warn("[sync] late_fee_policy_comparison unavailable:", e.message);
-        return [];
-      }),
-    ]);
-    const today = new Date().toISOString().slice(0, 10);
-    const active = policyRows.filter(
-      (p) => (!p.effective_date || p.effective_date <= today) && (!p.end_date || p.end_date > today)
-    );
-    const newest = (a, b) => String(b.effective_date || "").localeCompare(String(a.effective_date || ""));
-    const byOcc = new Map(), byProp = new Map();
-    for (const p of active) {
-      if (p.occupancy_id) {
-        const k = String(p.occupancy_id);
-        if (!byOcc.has(k)) byOcc.set(k, []);
-        byOcc.get(k).push(p);
-      } else if (p.property_id) {
-        const k = String(p.property_id);
-        if (!byProp.has(k)) byProp.set(k, []);
-        byProp.get(k).push(p);
-      }
-    }
-    const policyLabel = (p) => {
-      if (!p) return "No Policy Found";
-      const base = parseFloat(p.late_fee_base_amount) || 0;
-      const daily = parseFloat(p.late_fee_daily_amount) || 0;
-      if (p.late_fee_type === "Percentage") {
-        return base + "% of " + (p.eligible_charge_type === "All" ? "All Charges" : "Rent");
-      }
-      if (base === 0 && daily === 0) return "No Late Fee (Flat $0)";
-      return "Flat $" + base + (daily ? " + $" + daily + "/day" : "");
-    };
-    const resolvePolicy = (r) => {
-      const occ = r.occupancy_id ? (byOcc.get(String(r.occupancy_id)) || []).slice().sort(newest)[0] : null;
-      const prop = r.property_id ? (byProp.get(String(r.property_id)) || []).slice().sort(newest)[0] : null;
-      return policyLabel(occ || prop);
-    };
+    const rows = await appfolio.delinquency();
     clearTable("delinquency");
     const mapped = rows.map((r, i) => ({
-      late_fee_policy: resolvePolicy(r),
       property_name: r.property_name || r.property || "",
       property_id: r.property_id ? String(r.property_id) : "",
       unit: r.unit || "", unit_id: r.unit_id ? String(r.unit_id) : "",
@@ -147,7 +125,7 @@ export async function syncAll() {
     }));
     const cols = ["property_name","property_id","unit","unit_id","tenant_name","tenant_id",
       "tenant_status","amount_receivable","current_amount","thirty_plus","sixty_plus",
-      "ninety_plus","in_collections","late_fee_policy","synced_at"];
+      "ninety_plus","in_collections","synced_at"];
     if (mapped.length) upsertMany("delinquency", mapped, cols);
     totalRecords += mapped.length;
     console.log(`[sync] Delinquency: ${mapped.length} rows`);
@@ -361,8 +339,18 @@ export async function syncAll() {
   try {
     const rows = await appfolio.propertyDirectory();
     clearTable("properties");
-    const mapped = rows.map(r => ({
-      id: r.property_id ? String(r.property_id) : r.property_name || `prop-${Math.random()}`,
+    // The report itself is the verified API surface. Only fields actually
+    // present in returned records whose names explicitly identify a group are
+    // exposed; this deliberately does not guess an AppFolio group endpoint.
+    const discoveredGroups = new Map();
+    const propertyMemberships = [];
+    const mapped = rows.map(r => {
+      const groups = propertyGroupValues(r);
+      groups.forEach((g) => discoveredGroups.set(`${g.field}:${g.id}`, g));
+      const id = r.property_id ? String(r.property_id) : r.property_name || `prop-${Math.random()}`;
+      groups.forEach((g) => propertyMemberships.push({ group_id: `${g.field}:${g.id}`, property_id: id }));
+      return {
+      id,
       property_name: r.property_name || r.name || "",
       address: r.address || r.street || "",
       city: r.city || "", state: r.state || "", zip: r.zip || "",
@@ -370,10 +358,18 @@ export async function syncAll() {
       property_type: r.property_type || r.type || "",
       insurance_expiration: r.insurance_expiration || "",
       owners: r.owners || "",
+      group_labels: JSON.stringify(groups.map((g) => g.label)),
       synced_at,
-    }));
-    const cols = ["id","property_name","address","city","state","zip","unit_count","property_type","insurance_expiration","owners","synced_at"];
+    }; });
+    const cols = ["id","property_name","address","city","state","zip","unit_count","property_type","insurance_expiration","owners","group_labels","synced_at"];
     if (mapped.length) upsertMany("properties", mapped, cols);
+    clearTable("property_group_members");
+    clearTable("property_groups");
+    const groupRows = [...discoveredGroups.values()].map((g) => ({
+      id: `${g.field}:${g.id}`, label: g.label, source_field: g.field, synced_at,
+    }));
+    if (groupRows.length) upsertMany("property_groups", groupRows, ["id", "label", "source_field", "synced_at"]);
+    if (propertyMemberships.length) upsertMany("property_group_members", propertyMemberships, ["group_id", "property_id"]);
     totalRecords += mapped.length;
     console.log(`[sync] Properties: ${mapped.length}`);
   } catch (e) { errors.push(`properties: ${e.message}`); console.error("[sync]", e.message); }
@@ -414,10 +410,11 @@ export async function syncAll() {
       epa_cert_expires: r.epa_cert_expires || "",
       state_lic_expires: r.state_lic_expires || "",
       status: r.do_not_use_for_work_order === "Yes" ? "do_not_use" : (r.status || "active"),
+      custom_fields: JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => /custom|exempt|non.?applicable/i.test(k)))),
       synced_at,
     }));
     const cols = ["id","vendor_name","vendor_type","workers_comp_expires","liability_expires",
-      "auto_ins_expires","epa_cert_expires","state_lic_expires","status","synced_at"];
+      "auto_ins_expires","epa_cert_expires","state_lic_expires","status","custom_fields","synced_at"];
     if (mapped.length) upsertMany("vendors", mapped, cols);
     totalRecords += mapped.length;
     console.log(`[sync] Vendors: ${mapped.length}`);

@@ -32,6 +32,23 @@ function many(sql, params = []) {
   }
 }
 
+function teamSettings() {
+  const settings = {};
+  for (const row of many("SELECT key, value FROM team_settings")) {
+    try { settings[row.key] = JSON.parse(row.value); } catch { settings[row.key] = row.value; }
+  }
+  return settings;
+}
+function affirmative(value) {
+  return value === true || value === 1 || ["yes", "true", "1", "y"].includes(String(value || "").trim().toLowerCase());
+}
+export function vendorIsExempt(vendor, customKey = "") {
+  const dateExempt = vendor.liability_expires && new Date(vendor.liability_expires) > new Date(Date.now() + 10 * 365.25 * 86400000);
+  let customExempt = false;
+  try { customExempt = customKey && affirmative(JSON.parse(vendor.custom_fields || "{}")[customKey]); } catch {}
+  return dateExempt || customExempt;
+}
+
 // ── Date-range window ───────────────────────────────────────────────────────
 // A global filter lets the user scope time-windowed (activity) metrics to a
 // preset range. Point-in-time metrics (current occupancy, delinquency, open
@@ -79,16 +96,6 @@ function within(col, range) {
 function rangeLabel(range) {
   return RANGE_LABELS[normalizeRange(range)];
 }
-// Stable key-safe slug for a late fee policy label (drilldown keys). A short
-// hash of the full label is appended so distinct labels that sanitize to the
-// same text (e.g. "Flat $42.5" vs "Flat $42_5") can never collide.
-function policySlug(label) {
-  const s = String(label);
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return s.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") + "_" + h.toString(36);
-}
-
 // ── Sections ──────────────────────────────────────────────────────────────
 
 // Non-revenue units (unit directory `rentable` = No — the closest thing the
@@ -209,19 +216,6 @@ async function buildFinancials() {
     "SELECT SUM(current_amount) current, SUM(thirty_plus) thirty, SUM(sixty_plus) sixty, SUM(ninety_plus) ninety FROM delinquency"
   );
 
-  // Delinquency broken down by the late fee policy each occupancy falls under
-  // (resolved at sync time from AppFolio's late_fee_policy_comparison report).
-  const delinquencyByPolicy = many(
-    `SELECT COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') policy,
-            COUNT(*) count, SUM(amount_receivable) amount
-     FROM delinquency WHERE amount_receivable > 0
-     GROUP BY 1 ORDER BY amount DESC`
-  ).map((r) => ({
-    policy: r.policy,
-    count: num(r.count),
-    amount: round(r.amount, 2),
-    drill: "delinquencyPolicy_" + policySlug(r.policy),
-  }));
   // Delinquency split by charge type (rent vs utilities vs other), from the
   // per-charge aged_receivables_detail rows categorized at sync time.
   // Amounts are NET over all rows (credits included) so the tiles reconcile
@@ -272,7 +266,6 @@ async function buildFinancials() {
     delinquent,
     delinquentCount,
     delinquencyRate,
-    delinquencyByPolicy,
     delinquencyByCharge,
     aging: {
       current: round(aging.current, 2),
@@ -366,7 +359,7 @@ function buildMarketing(range) {
   };
 }
 
-function buildMaintenance() {
+function buildMaintenance(range) {
   const openWorkOrders = num(
     one(
       "SELECT COUNT(*) c FROM work_orders WHERE status NOT IN ('Completed','Canceled','Completed No Need To Bill')"
@@ -374,7 +367,9 @@ function buildMaintenance() {
   );
   const avgDaysToComplete = round(
     one(
-      "SELECT AVG(julianday(completed_date) - julianday(created_date)) a FROM work_orders WHERE completed_date IS NOT NULL AND completed_date != '' AND created_date IS NOT NULL AND created_date != '' AND completed_date >= created_date"
+      `SELECT AVG(julianday(completed_date) - julianday(created_date)) a FROM work_orders
+       WHERE completed_date IS NOT NULL AND completed_date != '' AND created_date IS NOT NULL AND created_date != ''
+         AND completed_date >= created_date AND ${within("completed_date", range)}`
     ).a
   );
 
@@ -538,7 +533,10 @@ export function computeBillableHours(periodOrRange) {
 
 // Move-ins in the window, each flagged with the number of non-turnover work
 // orders created in the 30 days following move-in.
-function computeMoveInWo(range) {
+function computeMoveInWo(range, propertyGroupId = "") {
+  const groupClause = propertyGroupId
+    ? " AND EXISTS (SELECT 1 FROM property_group_members pgm WHERE pgm.group_id = ? AND pgm.property_id = u.property_id)"
+    : "";
   const rows = many(
     `SELECT u.property_name, u.unit_name, u.tenant_name, u.move_in_date,
             SUM(CASE WHEN w.id IS NOT NULL AND NOT ${TURNOVER_WO} THEN 1 ELSE 0 END) wo_count,
@@ -548,9 +546,10 @@ function computeMoveInWo(range) {
        ON w.unit_id = u.id AND w.created_date != ''
       AND w.created_date >= u.move_in_date
       AND w.created_date <= date(u.move_in_date, '+30 days')
-     WHERE u.move_in_date != '' AND ${within("u.move_in_date", range)}
+      WHERE u.move_in_date != '' AND ${within("u.move_in_date", range)}${groupClause}
      GROUP BY u.id
-     ORDER BY u.move_in_date DESC`
+      ORDER BY u.move_in_date DESC`,
+    propertyGroupId ? [propertyGroupId] : []
   );
   return rows.map((r) => ({
     property_name: r.property_name,
@@ -563,25 +562,35 @@ function computeMoveInWo(range) {
   }));
 }
 
-function expCounts(table, col, where = "1=1") {
+function expCounts(table, col, where = "1=1", exclude = "1=1") {
   const expired = num(one(
-    `SELECT COUNT(*) c FROM ${table} WHERE ${where} AND ${col} != '' AND date(${col}) < date('now')`
+    `SELECT COUNT(*) c FROM ${table} WHERE ${where} AND ${exclude} AND ${col} != '' AND date(${col}) < date('now')`
   ).c);
   const expiring = num(one(
-    `SELECT COUNT(*) c FROM ${table} WHERE ${where} AND ${col} != '' AND date(${col}) >= date('now') AND date(${col}) <= date('now','+60 days')`
+    `SELECT COUNT(*) c FROM ${table} WHERE ${where} AND ${exclude} AND ${col} != '' AND date(${col}) >= date('now') AND date(${col}) <= date('now','+60 days')`
   ).c);
   const tracked = num(one(
-    `SELECT COUNT(*) c FROM ${table} WHERE ${where} AND ${col} != ''`
+    `SELECT COUNT(*) c FROM ${table} WHERE ${where} AND ${exclude} AND ${col} != ''`
   ).c);
   return { expired, expiring, tracked };
 }
 
-function buildOperations(range) {
+function selectedPropertyGroup(scope, settings = teamSettings()) {
+  const id = scope === "all" ? "" : (scope && scope !== "configured" ? scope : (settings.bonus_eligible_property_group || ""));
+  const group = id ? one("SELECT id, label FROM property_groups WHERE id = ?", [id]) : null;
+  return id && !group.id
+    ? { id, available: false, label: "Unavailable — selected AppFolio group was not returned by the last sync" }
+    : { id, available: true, label: group?.label || "All properties" };
+}
+
+function buildOperations(range, propertyGroupScope = "configured") {
+  const settings = teamSettings();
+  const propertyGroup = selectedPropertyGroup(propertyGroupScope, settings);
   // 1. Billable hours (current month)
   const billableHours = computeBillableHours(range);
 
   // 2. Move-in quality
-  const moveInRows = computeMoveInWo(range);
+  const moveInRows = computeMoveInWo(range, propertyGroup.available ? propertyGroup.id : "__unavailable__");
   const withWo = moveInRows.filter((r) => r.wo_count > 0).length;
   const moveInQuality = {
     total: moveInRows.length,
@@ -617,7 +626,6 @@ function buildOperations(range) {
   const tenantWhere = "status = 'Current'";
   const insurance = {
     tenants: expCounts("tenant_insurance", "insurance_expiration", tenantWhere),
-    vendors: expCounts("vendors", "liability_expires", "status != 'do_not_use'"),
     // Owner/property insurance now comes from the owner_insurance report
     // (AppFolio is phasing out the property-page expiration date).
     owners: expCounts("owner_insurance", "expiration_date"),
@@ -626,9 +634,15 @@ function buildOperations(range) {
     `SELECT COUNT(*) c FROM tenant_insurance WHERE ${tenantWhere} AND insurance_expiration != ''
      AND (LOWER(COALESCE(tenant_type,'')) LIKE '%commercial%' OR COALESCE(commercial_lease_type,'') != '')`
   ).c);
-  insurance.vendors.missing = num(one(
-    "SELECT COUNT(*) c FROM vendors WHERE status != 'do_not_use' AND COALESCE(liability_expires,'') = ''"
-  ).c);
+  const allVendors = many("SELECT liability_expires, custom_fields FROM vendors WHERE status != 'do_not_use'");
+  const eligibleVendors = allVendors.filter((v) => !vendorIsExempt(v, settings.vendor_exemption_field));
+  insurance.vendors = {
+    expired: eligibleVendors.filter((v) => v.liability_expires && new Date(v.liability_expires) < new Date()).length,
+    expiring: eligibleVendors.filter((v) => v.liability_expires && new Date(v.liability_expires) >= new Date() && new Date(v.liability_expires) <= new Date(Date.now() + 60 * 86400000)).length,
+    tracked: eligibleVendors.filter((v) => v.liability_expires).length,
+    missing: eligibleVendors.filter((v) => !v.liability_expires).length,
+    exempt: allVendors.length - eligibleVendors.length,
+  };
   // Properties with no owner-insurance policy covering them: a policy's
   // "properties" field is a comma-separated list of property names, so match
   // whole comma-delimited tokens (trimmed, case-insensitive) — plain substring
@@ -647,7 +661,7 @@ function buildOperations(range) {
      )`
   ).c);
 
-  return { billableHours, moveInQuality, woAging, insurance };
+  return { billableHours, moveInQuality, woAging, insurance, propertyGroup };
 }
 
 // ── Charts ──────────────────────────────────────────────────────────────────
@@ -725,9 +739,10 @@ async function buildCharts() {
 // Raw records behind every KPI tile, keyed by the same drill key the frontend
 // passes on each card. Each entry: { title, cols:[{key,label,money?,pct?}], rows }.
 
-function drillRegistry(range) {
+function drillRegistry(range, propertyGroupScope = "configured") {
   const dd = {};
   const make = (title, cols, sql) => ({ title, cols, sql });
+  const operationSettings = teamSettings();
 
   const unitCols = [
     { key: "property_name", label: "Property" },
@@ -855,18 +870,6 @@ function drillRegistry(range) {
     `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE sixty_plus > 0 ORDER BY sixty_plus DESC LIMIT ${LIM}`);
   dd.delinquency90 = make("90+ Days Past Due", delCols,
     `SELECT property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus FROM delinquency WHERE ninety_plus > 0 ORDER BY ninety_plus DESC LIMIT ${LIM}`);
-  // One drilldown per distinct late fee policy among delinquent accounts.
-  const delPolicyCols = [{ key: "late_fee_policy", label: "Late Fee Policy" }, ...delCols];
-  for (const { policy } of many(
-    `SELECT DISTINCT COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') policy FROM delinquency WHERE amount_receivable > 0`
-  )) {
-    dd["delinquencyPolicy_" + policySlug(policy)] = make(`Delinquent — ${policy}`, delPolicyCols,
-      `SELECT COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') late_fee_policy, property_name, unit, tenant_name, amount_receivable, current_amount, thirty_plus, sixty_plus, ninety_plus
-       FROM delinquency
-       WHERE amount_receivable > 0 AND COALESCE(NULLIF(late_fee_policy, ''), 'No Policy Found') = '${policy.replace(/'/g, "''")}'
-       ORDER BY amount_receivable DESC LIMIT ${LIM}`);
-  }
-
   // One drilldown per charge category (rent vs utilities vs other), showing
   // the individual unpaid charges behind each tile.
   const rcCols = [
@@ -960,12 +963,14 @@ function drillRegistry(range) {
     { key: "turnover_wos", label: "Turnover WOs (excluded)" },
     { key: "clean", label: "No WOs?" },
   ];
+  const operationGroup = selectedPropertyGroup(propertyGroupScope, operationSettings);
+  const scopedMoveIns = () => computeMoveInWo(range, operationGroup.available ? operationGroup.id : "__unavailable__");
   dd.moveInsClean = { title: `Move-ins with No Work Orders (${rangeLabel(range)})`, cols: moveInCols,
-    rowsFn: () => computeMoveInWo(range).filter((r) => r.wo_count === 0) };
+    rowsFn: () => scopedMoveIns().filter((r) => r.wo_count === 0) };
   dd.moveInsWithWo = { title: `Move-ins that Generated Work Orders (${rangeLabel(range)})`, cols: moveInCols,
-    rowsFn: () => computeMoveInWo(range).filter((r) => r.wo_count > 0) };
+    rowsFn: () => scopedMoveIns().filter((r) => r.wo_count > 0) };
   dd.moveInsAll = { title: `Move-ins vs Work Orders (${rangeLabel(range)})`, cols: moveInCols,
-    rowsFn: () => computeMoveInWo(range) };
+    rowsFn: () => scopedMoveIns() };
 
   // Operations — work order aging
   const woAgeCols = [
@@ -1014,15 +1019,19 @@ function drillRegistry(range) {
     { key: "auto_ins_expires", label: "Auto" },
     { key: "state_lic_expires", label: "State License" },
   ];
-  const vendorInsBase = `SELECT vendor_name, vendor_type, liability_expires, workers_comp_expires, auto_ins_expires, state_lic_expires FROM vendors WHERE status != 'do_not_use'`;
-  dd.vendorInsExpired = make("Vendor Liability Insurance — Expired", vendorInsCols,
-    `${vendorInsBase} AND liability_expires != '' AND date(liability_expires) < date('now') ORDER BY liability_expires ASC LIMIT ${LIM}`);
-  dd.vendorInsExpiring = make("Vendor Liability Insurance — Expiring in 60 Days", vendorInsCols,
-    `${vendorInsBase} AND liability_expires != '' AND date(liability_expires) >= date('now') AND date(liability_expires) <= date('now','+60 days') ORDER BY liability_expires ASC LIMIT ${LIM}`);
-  dd.vendorInsMissing = make("Vendors — No Liability Insurance on File", vendorInsCols,
-    `${vendorInsBase} AND COALESCE(liability_expires,'') = '' ORDER BY vendor_name LIMIT ${LIM}`);
-  dd.vendorInsAll = make("Vendor Insurance — All Tracked", vendorInsCols,
-    `${vendorInsBase} AND liability_expires != '' ORDER BY liability_expires ASC LIMIT ${LIM}`);
+  const vendorRows = () => many(`SELECT vendor_name, vendor_type, liability_expires, workers_comp_expires, auto_ins_expires, state_lic_expires, custom_fields FROM vendors WHERE status != 'do_not_use'`)
+    .map((v) => ({ ...v, exempt: vendorIsExempt(v, operationSettings.vendor_exemption_field) }));
+  const eligibleVendorRows = () => vendorRows().filter((v) => !v.exempt);
+  dd.vendorInsExpired = { title: "Vendor Liability Insurance — Expired", cols: vendorInsCols,
+    rowsFn: () => eligibleVendorRows().filter((v) => v.liability_expires && new Date(v.liability_expires) < new Date()).slice(0, LIM) };
+  dd.vendorInsExpiring = { title: "Vendor Liability Insurance — Expiring in 60 Days", cols: vendorInsCols,
+    rowsFn: () => eligibleVendorRows().filter((v) => v.liability_expires && new Date(v.liability_expires) >= new Date() && new Date(v.liability_expires) <= new Date(Date.now() + 60 * 86400000)).slice(0, LIM) };
+  dd.vendorInsMissing = { title: "Vendors — No Liability Insurance on File", cols: vendorInsCols,
+    rowsFn: () => eligibleVendorRows().filter((v) => !v.liability_expires).slice(0, LIM) };
+  dd.vendorInsAll = { title: "Vendor Insurance — All Tracked", cols: vendorInsCols,
+    rowsFn: () => eligibleVendorRows().filter((v) => v.liability_expires).slice(0, LIM) };
+  dd.vendorInsExempt = { title: "Vendor Insurance — Exempt (10-year rule or selected affirmative custom field)", cols: vendorInsCols,
+    rowsFn: () => vendorRows().filter((v) => v.exempt).slice(0, LIM) };
 
   // Owner/property insurance drilldowns now read from the owner_insurance
   // report (AppFolio is phasing out the property-page expiration date).
@@ -1083,7 +1092,7 @@ function drillRegistry(range) {
 }
 
 // Returns a single drilldown { title, cols, rows } for the given key, or null.
-export async function getDrilldown(key, range) {
+export async function getDrilldown(key, range, propertyGroupScope = "configured") {
   if (key === "income" || key === "grossIncome" || key === "netIncome") {
     const charts = await buildCharts();
     return {
@@ -1097,7 +1106,7 @@ export async function getDrilldown(key, range) {
       rows: (charts.monthlyRevenue || []).slice().reverse(),
     };
   }
-  const def = drillRegistry(range)[key];
+  const def = drillRegistry(range, propertyGroupScope)[key];
   if (!def) return null;
   const rows = def.rowsFn ? def.rowsFn() : def.sql ? many(def.sql) : [];
   return { title: def.title, cols: def.cols, rows };
@@ -1105,12 +1114,12 @@ export async function getDrilldown(key, range) {
 
 // ── Entry point ───────────────────────────────────────────────────────────
 
-export async function buildDashboard(range) {
+export async function buildDashboard(range, propertyGroupScope = "configured") {
   const occupancy = buildOccupancy();
   const leasing = buildLeasing(range);
   const marketing = buildMarketing(range);
-  const maintenance = buildMaintenance();
-  const operations = buildOperations(range);
+  const maintenance = buildMaintenance(range);
+  const operations = buildOperations(range, propertyGroupScope);
   const [financials, charts] = await Promise.all([
     buildFinancials(),
     buildCharts(),

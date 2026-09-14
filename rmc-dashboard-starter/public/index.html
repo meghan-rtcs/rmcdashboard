@@ -508,7 +508,7 @@
           <div style={{ background: C.bg, border: "1px solid " + C.border, borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.muted, marginTop: 12 }}>
             <strong style={{ color: C.black }}>Activity period: {rangeLabel}.</strong>{" "}
             This changes inquiries, applications, move-ins, renewals, and completed-work-order activity.
-            Current-state figures—occupancy, delinquency, rent, and open work orders—always show the latest data.
+            Current-state figures marked LIVE—occupancy, delinquency, rent, and open work orders—cannot be reconstructed for a prior Activity Period; historical point-in-time values are unavailable unless a locked snapshot exists.
           </div>
           {/* HERO */}
           <SectionHeader title="Top of Mind" subtitle="Tap any tile or chart for the records behind it" />
@@ -516,7 +516,7 @@
             <KpiCard big live label="Occupancy" value={fmt.pct(o.rate)} tone={o.rate >= 92 ? "good" : "warn"} sub={o.occupied + " of " + o.totalUnits + " occupied"} drill="occupancy" spark={occSpark} sparkColor={C.green} />
             <KpiCard big live label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" spark={delSpark} sparkColor={C.red} />
             <KpiCard big live label="Avg Rent / Door" value={fmt.money(f.avgRentPerDoor)} drill="rentRoll" />
-            <KpiCard big live label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} sub={fmt.num(w.avgDaysToComplete) + "d avg to close"} drill="openWorkOrders" />
+            <KpiCard big live label="Open Work Orders" value={fmt.num(w.openWorkOrders)} tone={w.openWorkOrders > 30 ? "warn" : "good"} sub={fmt.num(w.avgDaysToComplete) + "d avg to close · " + rangeLabel} drill="openWorkOrders" />
           </div>
 
           {/* DELINQUENCY (income/expense financials live on the CEO View) */}
@@ -540,22 +540,6 @@
                 {f.delinquencyByCharge.map((c) => (
                   <KpiCard key={c.drill} live label={c.category === "Other" ? "Other Charges" : c.category} value={fmt.money(c.amount)}
                     sub={c.count + (c.count === 1 ? " account" : " accounts")} drill={c.drill} />
-                ))}
-              </div>
-            </>
-          ) : null}
-
-          {/* DELINQUENCY BY LATE FEE POLICY */}
-          {(f.delinquencyByPolicy || []).length > 0 ? (
-            <>
-              <SectionHeader title="Delinquency by Late Fee Policy"
-                subtitle={fmt.money(f.delinquent) + " total across " + f.delinquentCount + " accounts, split by the late fee policy each tenancy falls under"} />
-              <div style={gridAuto(200)}>
-                <KpiCard big live label="Total Delinquent" value={fmt.money(f.delinquent)} tone="bad" sub={f.delinquentCount + " accounts"} drill="delinquency" />
-                {f.delinquencyByPolicy.map((p) => (
-                  <KpiCard key={p.drill} live label={p.policy} value={fmt.money(p.amount)}
-                    tone={/no late fee|no policy/i.test(p.policy) ? "warn" : undefined}
-                    sub={p.count + (p.count === 1 ? " account" : " accounts")} drill={p.drill} />
                 ))}
               </div>
             </>
@@ -784,11 +768,12 @@
       const mi = ops.moveInQuality || {};
       const wa = ops.woAging || {};
       const ins = ops.insurance || { tenants: {}, vendors: {}, owners: {} };
+      const groupScope = ops.propertyGroup || { available: true, label: "All properties" };
       return (
         <div>
           {ops.billableHours ? <TechHoursSection initial={ops.billableHours} /> : null}
 
-          <SectionHeader title="Move-in Quality" subtitle={"Move-ins · " + rangeLabel + " · counts non-turnover work orders created within 30 days of move-in (unit turns, locks, blinds & make-ready excluded)"} />
+          <SectionHeader title="Move-in Quality" subtitle={"Move-ins · " + rangeLabel + " · " + (groupScope.available ? "Bonus property group: " + groupScope.label : groupScope.label) + " · counts non-turnover work orders created within 30 days of move-in (unit turns, locks, blinds & make-ready excluded)"} />
           <div style={gridAuto(200)}>
             <KpiCard label="Move-ins" value={fmt.num(mi.total)} sub={rangeLabel} drill="moveInsAll" />
             <KpiCard label="No Work Orders" value={fmt.num(mi.withoutWo)} tone="good" sub="Clean move-ins" drill="moveInsClean" />
@@ -811,12 +796,13 @@
             <KpiCard live label="Policies Tracked" value={fmt.num(ins.tenants.tracked)} drill="tenantInsAll" />
           </div>
 
-          <SectionHeader title="Insurance Compliance — Vendors" subtitle="Liability insurance from the AppFolio vendor directory (vendors flagged do-not-use excluded)" />
+          <SectionHeader title="Insurance Compliance — Vendors" subtitle="Liability insurance from the AppFolio vendor directory (do-not-use and policies expiring more than 10 years out are excluded)" />
           <div style={gridAuto(200)}>
             <KpiCard live label="Expired Liability" value={fmt.num(ins.vendors.expired)} tone={ins.vendors.expired ? "bad" : "good"} drill="vendorInsExpired" />
             <KpiCard live label="Expiring ≤ 60 Days" value={fmt.num(ins.vendors.expiring)} tone={ins.vendors.expiring ? "warn" : "good"} drill="vendorInsExpiring" />
             <KpiCard live label="No Policy on File" value={fmt.num(ins.vendors.missing)} tone={ins.vendors.missing ? "warn" : "good"} drill="vendorInsMissing" />
             <KpiCard live label="Policies Tracked" value={fmt.num(ins.vendors.tracked)} drill="vendorInsAll" />
+            <KpiCard live label="Exempt (>10 years)" value={fmt.num(ins.vendors.exempt)} tone="info" drill="vendorInsExempt" />
           </div>
 
           <SectionHeader title="Insurance Compliance — Properties / Owners" subtitle="Complete owner insurance inventory from the AppFolio Owner Insurance report · current-state data (not affected by Activity period)" />
@@ -835,8 +821,8 @@
       );
     }
 
-    // Shared client-side password gate for restricted tabs (CEO View, Team
-    // Performance). Unlocking one tab unlocks the others for this page load.
+    // Existing CEO gate retained for the CEO view. Owner-only features below
+    // use the separate server-verified OWNER_PASSWORD session instead.
     let restrictedUnlocked = false;
     function PasswordGate({ label, children }) {
       const [authed, setAuthed] = useState(restrictedUnlocked);
@@ -919,16 +905,6 @@
               ))}
             </div>
           ) : null}
-          {(f.delinquencyByPolicy || []).length > 0 ? (
-            <div style={{ ...gridAuto(200), marginTop: 12 }}>
-              {f.delinquencyByPolicy.map((p) => (
-                <KpiCard key={p.drill} live label={p.policy} value={fmt.money(p.amount)}
-                  tone={/no late fee|no policy/i.test(p.policy) ? "warn" : undefined}
-                  sub={p.count + (p.count === 1 ? " account" : " accounts")} drill={p.drill} />
-              ))}
-            </div>
-          ) : null}
-
           <SectionHeader title="Renewals & Portfolio" />
           <div style={gridAuto(180)}>
             <KpiCard label="Renewal Rate" value={fmt.pct(l.renewalRate)} tone={l.renewalRate >= 60 ? "good" : "warn"} drill="renewals" />
@@ -991,8 +967,8 @@
           </div>
           <div style={{ minWidth: 108, textAlign: "center" }}><TierBadge tier={k.tier} configured={k.configured} active={k.active} /></div>
           <div style={{ textAlign: "right", minWidth: 92 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: k.payout ? C.green : C.muted, fontVariantNumeric: "tabular-nums" }}>{fmt.money(k.payout)}</div>
-            <div style={{ fontSize: 9.5, color: "#B8AF9C" }}>of {fmt.money(k.maxPayout)} max</div>
+            <div style={{ fontSize: 10.5, fontWeight: 600, color: C.muted }}>Even-weighted</div>
+            <div style={{ fontSize: 9.5, color: "#B8AF9C" }}>see employee payout</div>
           </div>
           {clickable && <span style={{ fontSize: 13, color: hover ? C.gold : "#CFC6B2" }}>›</span>}
         </div>
@@ -1006,7 +982,7 @@
       const [ovEmployee, setOvEmployee] = useState("");
       const [ovHours, setOvHours] = useState("");
       useEffect(() => {
-        fetch("/api/team/config").then((r) => r.json()).then(setCfg).catch((e) => setErr(e.message));
+        fetch("/api/team/config").then((r) => r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.error || "Owner sign-in required")))).then(setCfg).catch((e) => setErr(e.message));
       }, []);
       const setTier = (id, tierName, field, val) => {
         setCfg((c) => ({ ...c, configs: c.configs.map((k) => k.id === id
@@ -1016,6 +992,9 @@
       const save = async () => {
         setSaving(true); setErr(null);
         try {
+          const settingsRes = await fetch("/api/owner/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...cfg.settings, quarterly_incentive: Number(cfg.settings.quarterly_incentive), stretch_bonus: Number(cfg.settings.stretch_bonus) }) });
+          if (!settingsRes.ok) throw new Error((await settingsRes.json()).error || "Bonus settings save failed");
           for (const k of cfg.configs) {
             const res = await fetch("/api/team/config", { method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id: k.id, tiers: k.tiers, active: !!k.active }) });
@@ -1032,9 +1011,9 @@
       const inp = { width: 74, padding: "4px 6px", border: "1px solid " + C.border, borderRadius: 6, fontSize: 12, background: "#fff" };
       return (
         <Modal title="KPI Configuration (thresholds, payouts & activation)" onClose={onClose}>
-          {!cfg ? <div style={{ padding: 40, textAlign: "center", color: C.muted }}>Loading…</div> : (
+          {!cfg ? <div style={{ padding: 40, textAlign: "center", color: err ? C.red : C.muted }}>{err || "Loading…"}</div> : (
             <div style={{ padding: "14px 22px 22px" }}>
-              <p style={{ fontSize: 11.5, color: C.muted, marginBottom: 12 }}>Thresholds are the lower bound of each tier ("Good 125–145" is stored as 125, since Better starts at 146). Leave a threshold blank for "not yet configured". Payouts are dollar amounts per KPI per quarter.</p>
+              <p style={{ fontSize: 11.5, color: C.muted, marginBottom: 12 }}>Thresholds are the lower bound of each tier. Quarterly incentive payouts are set once below and divided evenly over each employee’s maximum four weighted KPIs.</p>
               {cfg.configs.map((k) => (
                 <div key={k.id} style={{ border: "1px solid " + C.border, borderRadius: 9, padding: "10px 14px", marginBottom: 10, opacity: k.active ? 1 : 0.6 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
@@ -1052,9 +1031,6 @@
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textTransform: "capitalize", width: 40 }}>{tn}</span>
                         <input style={inp} placeholder="threshold" value={k.tiers[tn] && k.tiers[tn].threshold != null ? k.tiers[tn].threshold : ""}
                           onChange={(e) => setTier(k.id, tn, "threshold", e.target.value === "" ? null : e.target.value)} />
-                        <span style={{ fontSize: 11, color: "#B8AF9C" }}>$</span>
-                        <input style={inp} placeholder="payout" value={k.tiers[tn] && k.tiers[tn].payout != null ? k.tiers[tn].payout : ""}
-                          onChange={(e) => setTier(k.id, tn, "payout", e.target.value)} />
                       </div>
                     ))}
                   </div>
@@ -1068,6 +1044,21 @@
                   <input style={{ ...inp, width: 110 }} placeholder="Scheduled hours" value={ovHours} onChange={(e) => setOvHours(e.target.value)} />
                 </div>
               </div>
+              <div style={{ border: "1px solid " + C.border, borderRadius: 9, padding: "10px 14px", marginTop: 10 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Bonus program & property scope</div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <label style={{ fontSize: 11, color: C.muted }}>Quarterly $ <input style={inp} value={cfg.settings.quarterly_incentive} onChange={(e) => setCfg(c => ({...c,settings:{...c.settings,quarterly_incentive:e.target.value}}))} /></label>
+                  <label style={{ fontSize: 11, color: C.muted }}>Stretch $ <input style={inp} value={cfg.settings.stretch_bonus} onChange={(e) => setCfg(c => ({...c,settings:{...c.settings,stretch_bonus:e.target.value}}))} /></label>
+                  {["good","better","best"].map(t => <label key={t} style={{ fontSize: 11, color: C.muted }}>{t} % <input style={{...inp,width:52}} value={Math.round((cfg.settings.tier_payouts[t] || 0) * 100)} onChange={(e) => setCfg(c => ({...c,settings:{...c.settings,tier_payouts:{...c.settings.tier_payouts,[t]:Number(e.target.value)/100}}}))} /></label>)}
+                  <label style={{ fontSize: 11, color: C.muted }}>Bonus-eligible property group <select value={cfg.settings.bonus_eligible_property_group || ""} onChange={(e) => setCfg(c => ({...c,settings:{...c.settings,bonus_eligible_property_group:e.target.value}}))} style={{...inp,width:190}}><option value="">All properties (default)</option>{(cfg.propertyGroups || []).map(g => <option key={g.id} value={g.id}>{g.label}</option>)}</select></label>
+                  <label style={{ fontSize: 11, color: C.muted }}>Vendor exemption field <select disabled={cfg.vendorExemptionUnavailable} value={cfg.settings.vendor_exemption_field || ""} onChange={(e) => setCfg(c => ({...c,settings:{...c.settings,vendor_exemption_field:e.target.value}}))} style={{...inp,width:180,opacity:cfg.vendorExemptionUnavailable ? .65 : 1}}><option value="">{cfg.vendorExemptionUnavailable ? "Unavailable — vendor directory exposes no custom fields" : "None / use 10-year rule"}</option>{(cfg.vendorExemptionFields || []).map(f => <option key={f} value={f}>{f}</option>)}</select></label>
+                </div>
+                <div style={{marginTop:10,display:"flex",gap:10,flexWrap:"wrap"}}>
+                  {(cfg.roster || []).map(r => <label key={r.id} style={{fontSize:11,color:C.muted}}>{r.role} max $ <input style={inp} value={cfg.settings.discretionary_max_by_role?.[r.role] ?? 4000} onChange={e => setCfg(c => ({...c,settings:{...c.settings,discretionary_max_by_role:{...c.settings.discretionary_max_by_role,[r.role]:Number(e.target.value)}}}))} /></label>)}
+                </div>
+                <label style={{display:"block",fontSize:11,color:C.muted,marginTop:10}}>Discretionary questions (one per line, 7–10)<textarea value={(cfg.settings.discretionary_questions || []).join("\n")} onChange={e => setCfg(c => ({...c,settings:{...c.settings,discretionary_questions:e.target.value.split("\n").map(x=>x.trim()).filter(Boolean)}}))} style={{display:"block",width:"100%",minHeight:85,marginTop:4,padding:7,border:"1px solid "+C.border,borderRadius:6,fontFamily:"inherit",fontSize:12}} /></label>
+                {!cfg.propertyGroups?.length ? <p style={{fontSize:10.5,color:C.amber,marginTop:8}}>No property groups have been returned by AppFolio’s verified property directory yet. All properties remain selected until a group exists there and is synced.</p> : null}
+              </div>
               {err ? <p style={{ color: C.red, fontSize: 12, marginTop: 10 }}>{err}</p> : null}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
                 <button onClick={onClose} style={{ background: C.bg, border: "1px solid " + C.border, borderRadius: 8, padding: "8px 16px", fontSize: 13, color: C.muted }}>Cancel</button>
@@ -1079,7 +1070,7 @@
       );
     }
 
-    function TeamTab() {
+    function TeamTab({ refreshKey, propertyGroup }) {
       const [quarter, setQuarter] = useState(null); // null = current
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
@@ -1089,20 +1080,24 @@
       const [showConfig, setShowConfig] = useState(false);
       const [snapping, setSnapping] = useState(false);
       const [openEmp, setOpenEmp] = useState(null);
+      const [retroactive, setRetroactive] = useState(false);
 
       const load = (q) => {
         setLoading(true);
-        fetch("/api/team" + (q ? "?quarter=" + encodeURIComponent(q) : ""))
+        const params = new URLSearchParams({ propertyGroup });
+        if (q) params.set("quarter", q);
+        if (retroactive) params.set("retroactive", "1");
+        fetch("/api/team?" + params.toString())
           .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
           .then((j) => { setData(j); setError(null); })
           .catch((e) => setError(e.message))
           .finally(() => setLoading(false));
       };
-      useEffect(() => load(quarter), [quarter]);
+      useEffect(() => load(quarter), [quarter, retroactive, propertyGroup, refreshKey]);
 
       const openDrill = (key) => {
         setDrill(key); setDrillData(null);
-        fetch("/api/team/drilldown/" + encodeURIComponent(key) + "?quarter=" + encodeURIComponent(data.quarter))
+        fetch("/api/team/drilldown/" + encodeURIComponent(key) + "?quarter=" + encodeURIComponent(data.quarter) + "&propertyGroup=" + encodeURIComponent(propertyGroup))
           .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
           .then(setDrillData)
           .catch(() => setDrillData({ title: "Could not load records", cols: [], rows: [] }));
@@ -1111,7 +1106,7 @@
       const snapshot = () => {
         if (!window.confirm("Snapshot " + data.quarter + "? This locks the numbers shown for this quarter (an existing snapshot will be replaced with a new timestamp).")) return;
         setSnapping(true);
-        fetch("/api/team/snapshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quarter: data.quarter }) })
+        fetch("/api/team/snapshot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quarter: data.quarter, replaceExisting: !!data.snapshot?.locked }) })
           .then((r) => r.json()).then(() => load(quarter)).finally(() => setSnapping(false));
       };
 
@@ -1135,10 +1130,11 @@
               <button onClick={snapshot} disabled={snapping} style={{ background: C.black, color: "#fff", border: "none", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 600, opacity: snapping ? 0.6 : 1 }}>{snapping ? "Locking…" : data.snapshot && data.snapshot.locked ? "Re-snapshot Quarter" : "Snapshot & Lock Quarter"}</button>
             </div>
           </div>
+          {data.snapshot?.locked && !data.isCurrent ? <label style={{display:"block",margin:"2px 0 9px",fontSize:11.5,color:C.muted}}><input type="checkbox" checked={retroactive} onChange={e=>setRetroactive(e.target.checked)} /> Retroactively score captured values using current thresholds (does not change locked payouts)</label> : null}
 
           {data.snapshot && data.snapshot.locked ? (
             <div style={{ background: "rgba(45,140,62,0.07)", border: "1px solid rgba(45,140,62,0.3)", borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.green, marginBottom: 8 }}>
-              🔒 Locked snapshot taken {new Date(data.snapshot.at).toLocaleString()} — these numbers will not change even if AppFolio data is edited retroactively.
+              {data.retroactive ? "↻ RETROACTIVE MODE — captured historical values are re-scored under current thresholds; locked payouts are unchanged." : "🔒 Locked snapshot taken " + new Date(data.snapshot.at).toLocaleString() + " — original locked payouts are preserved."}
             </div>
           ) : data.notLocked ? (
             <div style={{ background: "rgba(216,146,26,0.07)", border: "1px solid rgba(216,146,26,0.35)", borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.amber, marginBottom: 8 }}>
@@ -1163,15 +1159,15 @@
           ) : null}
 
           <div style={gridAuto(200)}>
-            <KpiCard label="Total Bonuses Earned" value={fmt.money(totalEarned)} tone="good" sub={data.quarter} big />
-            <KpiCard label="Max Possible" value={fmt.money(totalMax)} sub="If every KPI hit Best" big />
+            <KpiCard label="Quarterly Incentive Earned" value={fmt.money(totalEarned)} tone="good" sub={data.quarter} big />
+            <KpiCard label="Quarterly Possible" value={fmt.money(totalMax)} sub="Evenly split across up to 4 weighted KPIs" big />
             <KpiCard label="Quarter Window" value={data.quarterStart.slice(5) + " → " + data.quarterEnd.slice(5)} sub={data.isCurrent ? "In progress — metrics reflect quarter-to-date" : "Closed"} big />
           </div>
 
           {data.departments.map((d) => (
             <div key={d.department}>
               <SectionHeader title={d.department}
-                subtitle={(d.members.length ? "Pool split: " + d.members.map((m) => m.name.split(" ")[0] + " " + Math.round(m.share * 100) + "%").join(" · ") : "No pooled members — individual KPIs only") + " · Department earned " + fmt.money(d.earned) + " of " + fmt.money(d.max)} />
+                subtitle={(d.members.length ? "Shared department result: " + d.members.map((m) => m.name.split(" ")[0]).join(" · ") : "No assigned members") + " · Each employee’s eligible results are weighted evenly"} />
               <div style={{ background: C.card, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
                 {d.kpis.map((k) => <KpiRow key={k.id} k={k} onDrill={openDrill} />)}
                 {d.individualKpis.length ? (
@@ -1182,7 +1178,7 @@
             </div>
           ))}
 
-          <SectionHeader title="Bonuses by Employee" subtitle="Department KPI payouts split by share weight · individual KPIs paid in full to the assignee · click a row for the breakdown" />
+          <SectionHeader title="Bonuses by Employee" subtitle={"Each employee’s quarterly " + fmt.money(data.settings?.quarterlyIncentive) + " incentive is split evenly across no more than four weighted KPI results · click a row for details"} />
           <div style={{ background: C.card, border: "1px solid " + C.border, borderRadius: 10, overflow: "hidden" }}>
             {data.employees.map((e) => (
               <div key={e.id}>
@@ -1190,7 +1186,7 @@
                   style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderBottom: "1px solid " + C.grid, cursor: "pointer" }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: C.black }}>{e.name}</div>
-                    <div style={{ fontSize: 10.5, color: C.muted }}>{e.role}{Object.keys(e.allocations).length ? " · " + Object.entries(e.allocations).map(([d, w]) => Math.round(w * 100) + "% " + d).join(", ") : " · Individual KPIs only"}</div>
+                    <div style={{ fontSize: 10.5, color: C.muted }}>{e.role + " · " + e.weightedKpiCount + " weighted KPI" + (e.weightedKpiCount === 1 ? "" : "s") + " · YTD " + fmt.money(e.ytdEarned) + " of " + fmt.money(e.ytdPossible)}</div>
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 17, fontWeight: 600, color: e.earned ? C.green : C.muted, fontVariantNumeric: "tabular-nums" }}>{fmt.money(e.earned)}</div>
@@ -1203,11 +1199,13 @@
                     {e.breakdown.length === 0 ? <div style={{ fontSize: 11.5, color: C.muted, padding: "6px 0" }}>No KPIs apply to this employee yet.</div> :
                       e.breakdown.map((b, i) => (
                         <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11.5, padding: "4px 0", color: C.muted }}>
-                          <span style={{ flex: 1 }}>{b.kpi} <span style={{ color: "#B8AF9C" }}>({b.type === "individual" ? "individual" : b.department + " · " + Math.round(b.share * 100) + "% share"})</span></span>
+                           <span style={{ flex: 1 }}>{b.kpi} <span style={{ color: "#B8AF9C" }}>({b.type === "individual" ? "individual" : b.department})</span></span>
                           <TierBadge tier={b.tier} configured={b.tier != null} active={true} />
                           <span style={{ width: 90, textAlign: "right", fontWeight: 600, color: b.payout ? C.green : C.muted, fontVariantNumeric: "tabular-nums" }}>{fmt.money(b.payout)}</span>
                         </div>
                       ))}
+                    {e.expectations?.length ? <div style={{fontSize:11,color:C.muted,paddingTop:7}}>Unweighted expectations: {e.expectations.map(x => x.kpi).join(" · ")}</div> : null}
+                    <div style={{fontSize:11.5,color:e.stretch?.eligible ? C.green : C.muted,paddingTop:8}}>Year-end stretch {e.stretch?.eligible ? fmt.money(e.stretch.amount) + " eligible" : e.stretch?.status + " — " + e.stretch?.reason}{e.stretch?.bestRatio != null ? " (" + e.stretch.bestRatio + "% Best)" : ""}</div>
                   </div>
                 ) : null}
               </div>
@@ -1224,32 +1222,98 @@
       );
     }
 
+    function OwnerScorecard() {
+      const [owner, setOwner] = useState(null);
+      const [cfg, setCfg] = useState(null);
+      const [data, setData] = useState(null);
+      const [employee, setEmployee] = useState("");
+      const [answers, setAnswers] = useState([]);
+      const [retiredAdjustments, setRetiredAdjustments] = useState([]);
+      const [saving, setSaving] = useState(false);
+      const [error, setError] = useState(null);
+      const [year, setYear] = useState(String(new Date().getFullYear()));
+      const [reviewQuarter, setReviewQuarter] = useState("Q4");
+      const quarter = year + "-" + reviewQuarter;
+      const load = () => {
+        fetch("/api/owner/session").then(r => r.json()).then(j => {
+          setOwner(j.owner);
+          if (!j.owner) return;
+          return Promise.all([
+            fetch("/api/team/config").then(r => r.ok ? r.json() : Promise.reject(new Error("Owner sign-in required"))),
+            fetch("/api/owner/scorecard?quarter=" + quarter).then(r => r.ok ? r.json() : Promise.reject(new Error("Could not load scorecard"))),
+            fetch("/api/owner/historical-adjustments").then(r => r.ok ? r.json() : Promise.reject(new Error("Could not load historical adjustment annotations"))),
+          ]).then(([c, d, h]) => { setCfg(c); setData(d); setEmployee(d.roster[0]?.id || ""); setRetiredAdjustments(h.adjustments || []); });
+        }).catch(e => setError(e.message));
+      };
+      useEffect(load, [year, reviewQuarter]);
+      useEffect(() => {
+        if (!data || !employee) return;
+        const review = data.reviews.find(r => r.employee_id === employee);
+        setAnswers(review?.answers || Array((cfg?.settings?.discretionary_questions || []).length).fill("na"));
+      }, [employee, data, cfg]);
+      if (owner === null) return <div style={{padding:50,textAlign:"center",color:C.muted}}>Checking owner access…</div>;
+      if (!owner) return <div style={{maxWidth:520,margin:"55px auto",padding:24,background:C.card,border:"1px solid "+C.border,borderRadius:12}}>
+        <div style={{fontWeight:700,fontSize:16,marginBottom:8}}>Owner-only bonus scorecard</div><p style={{fontSize:13,color:C.muted,lineHeight:1.5}}>Discretionary questions and scores are not included in team or public APIs. Sign in with the separate owner session to view or edit them.</p>
+        <a href="/owner-login.html" style={{display:"inline-block",marginTop:14,background:C.black,color:"#fff",padding:"8px 14px",borderRadius:8,fontSize:13,fontWeight:600,textDecoration:"none"}}>Owner sign in</a>
+      </div>;
+      if (error || !cfg || !data) return <div style={{padding:30,color:C.red}}>{error || "Loading owner scorecard…"}</div>;
+      const emp = data.roster.find(e => e.id === employee);
+      const questions = cfg.settings.discretionary_questions || [];
+      const scored = answers.filter(a => a !== "na").map(Number);
+      const max = Number(cfg.settings.discretionary_max_by_role?.[emp?.role] || 4000);
+      const bonus = scored.length ? Math.round((scored.reduce((s,a)=>s+a,0) / (scored.length * 2)) * max) : 0;
+      const save = async () => { setSaving(true); setError(null); try {
+        const r = await fetch("/api/owner/scorecard",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({quarter,employee_id:employee,answers})});
+        if (!r.ok) throw new Error((await r.json()).error || "Save failed"); load();
+      } catch(e){setError(e.message)} finally {setSaving(false)} };
+      return <div>
+        <SectionHeader title="Owner-only discretionary scorecard" subtitle="0 / 1 / 2 / N/A · not visible to the team" />
+        {retiredAdjustments.length ? <div style={{marginBottom:12,padding:"10px 12px",borderRadius:8,background:"#FFF7E6",color:C.brown,fontSize:12}}>Historical retired-share annotation: {retiredAdjustments.map(a=>a.quarter+" "+fmt.money(a.amount)+" — "+a.note).join(" · ")}</div> : null}
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:14}}>
+          <label style={{fontSize:12,color:C.muted}}>Scorecard <select value={year} onChange={e=>setYear(e.target.value)} style={{marginLeft:5,padding:"5px 8px",border:"1px solid "+C.border,borderRadius:6}}>{Array.from({length:5},(_,i)=>new Date().getFullYear()-2+i).map(y=><option key={y} value={y}>{y}</option>)}</select> <select value={reviewQuarter} onChange={e=>setReviewQuarter(e.target.value)} style={{marginLeft:5,padding:"5px 8px",border:"1px solid "+C.border,borderRadius:6}}><option value="Q3">Q3 — September</option><option value="Q4">Q4 — year-end</option></select></label>
+          <select value={employee} onChange={e=>setEmployee(e.target.value)} style={{padding:"7px 9px",border:"1px solid "+C.border,borderRadius:7,background:"#fff"}}>{data.roster.map(e=><option key={e.id} value={e.id}>{e.name} — {e.role}</option>)}</select>
+          <span style={{fontSize:12,color:C.green,fontWeight:700}}>Score-based discretionary guide: {fmt.money(bonus)} of {fmt.money(max)}</span>
+        </div>
+        <div style={{background:C.card,border:"1px solid "+C.border,borderRadius:10,overflow:"hidden"}}>
+          {questions.map((q,i)=><div key={i} style={{padding:"12px 15px",borderBottom:"1px solid "+C.grid,display:"flex",gap:12,alignItems:"center",justifyContent:"space-between",flexWrap:"wrap"}}>
+            <span style={{fontSize:13}}>{i+1}. {q}</span><select value={answers[i] ?? "na"} onChange={e=>setAnswers(a=>a.map((x,n)=>n===i?(e.target.value==="na"?"na":Number(e.target.value)):x))} style={{padding:"5px 8px",border:"1px solid "+C.border,borderRadius:6}}><option value="na">N/A</option><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+          </div>)}
+        </div>
+        {error ? <p style={{color:C.red,fontSize:12,marginTop:8}}>{error}</p> : null}
+        <button onClick={save} disabled={saving} style={{marginTop:14,background:C.gold,color:"#fff",border:0,borderRadius:8,padding:"8px 16px",fontWeight:600}}>{saving?"Saving…":"Save owner scorecard"}</button>
+      </div>;
+    }
+
     function App() {
       const [data, setData] = useState(null);
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [tab, setTab] = useState("dashboard");
       const [range, setRange] = useState("this_month");
+      const [propertyGroup, setPropertyGroup] = useState("configured");
+      const [propertyGroups, setPropertyGroups] = useState([]);
       const [syncing, setSyncing] = useState(false);
+      const [teamRefresh, setTeamRefresh] = useState(0);
       const [activeDrill, setActiveDrill] = useState(null);
       const [drillData, setDrillData] = useState(null);
       const [drillLoading, setDrillLoading] = useState(false);
 
       const load = () => {
         setLoading(true);
-        fetch("/api/dashboard?range=" + encodeURIComponent(range))
+        fetch("/api/dashboard?range=" + encodeURIComponent(range) + "&propertyGroup=" + encodeURIComponent(propertyGroup))
           .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
           .then((j) => { setData(j); setError(null); })
           .catch((e) => setError(e.message))
           .finally(() => setLoading(false));
       };
-      useEffect(load, [range]);
+      useEffect(load, [range, propertyGroup]);
+      useEffect(() => { fetch("/api/property-groups").then(r => r.ok ? r.json() : { groups: [] }).then(j => setPropertyGroups(j.groups || [])); }, []);
 
       const sync = () => {
         setSyncing(true);
         fetch("/api/sync", { method: "POST" })
           .then((r) => r.json())
-          .then(() => load())
+          .then(() => { setTeamRefresh(n => n + 1); fetch("/api/property-groups").then(r => r.ok ? r.json() : {groups:[]}).then(j => setPropertyGroups(j.groups || [])); load(); })
           .catch((e) => setError(e.message))
           .finally(() => setSyncing(false));
       };
@@ -1261,6 +1325,7 @@
         { id: "operations", label: "Operations" },
         { id: "team", label: "Team Performance" },
         { id: "ceo", label: "CEO View" },
+        { id: "owner", label: "Owner Bonus" },
       ];
       const rangeOptions = [
         { id: "this_month", label: "This Mo", full: "This month" },
@@ -1276,7 +1341,7 @@
         setActiveDrill(key);
         setDrillData(null);
         setDrillLoading(true);
-        fetch("/api/drilldown/" + encodeURIComponent(key) + "?range=" + encodeURIComponent(range))
+        fetch("/api/drilldown/" + encodeURIComponent(key) + "?range=" + encodeURIComponent(range) + "&propertyGroup=" + encodeURIComponent(propertyGroup))
           .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
           .then((j) => setDrillData(j))
           .catch(() => setDrillData({ title: "Could not load records", cols: [], rows: [] }))
@@ -1321,6 +1386,7 @@
                     </button>
                   ))}
                 </div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: "uppercase", letterSpacing: .4 }}>Property group <select value={propertyGroup} onChange={e => setPropertyGroup(e.target.value)} style={{ marginLeft: 5, fontSize: 12, padding: "5px 7px", border: "1px solid " + C.border, borderRadius: 6, background: "#fff", color: C.black }}><option value="configured">Configured bonus group</option><option value="all">All properties</option>{propertyGroups.map(g => <option key={g.id} value={g.id}>{g.label}</option>)}</select></label>
               </div>
             </nav>
 
@@ -1338,8 +1404,9 @@
                   {tab === "dashboard" && <DashboardTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "leasing" && <LeasingTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "operations" && <OperationsTab d={data.dashboard} rangeLabel={rangeLabel} />}
-                  {tab === "team" && <PasswordGate label="Team Performance"><TeamTab /></PasswordGate>}
+                   {tab === "team" && <PasswordGate label="Team Performance"><TeamTab refreshKey={range + ":" + teamRefresh} propertyGroup={propertyGroup} /></PasswordGate>}
                   {tab === "ceo" && <PasswordGate label="CEO View"><CeoTab d={data.dashboard} /></PasswordGate>}
+                   {tab === "owner" && <OwnerScorecard />}
                   {data.dashboard.meta.totalUnits === 0 && tab === "dashboard" ? (
                     <div style={{ marginTop: 20, background: C.card, border: "1px solid " + C.border, borderLeft: "4px solid " + C.amber, borderRadius: 10, padding: 18 }}>
                       <p style={{ fontSize: 13, color: C.muted }}>No data yet. Make sure AppFolio credentials are set, then click <b>Sync Now</b>.</p>
