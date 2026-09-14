@@ -1,0 +1,42 @@
+Update the J.J. Panzer KPI dashboard based on client feedback. Make all of the following changes. Do not change anything not listed here.
+
+1. REMOVE EMPLOYEE
+Remove Mark (Associate Property Manager) entirely from the dashboard: employee cards, KPI assignments, and the bonus pool split (he currently holds 40%). Redistribute the pool logic so it no longer references him.
+
+2. REMOVE SECTION
+Delete the entire "Delinquency by Late Fee Policy" section at the bottom of the dashboard. Remove its data queries too, not just the UI.
+
+3. FIX ACTIVITY PERIOD SYNC
+Several KPI tiles do not recalculate when the activity period changes. Audit every metric and make sure each one respects the selected activity period and refreshes on change and on manual sync.
+
+4. BUILDING INSPECTIONS KPI
+Reassign from Mark to John (primary) with Scott and Bong as contributors. Target is total units / 12 per month (725 units = 60/month). Thresholds: Good = 40 units/month, Better = 50, Best = 60+.
+
+5. CLEAN MOVE-IN KPI
+Label it explicitly as "Move-ins with no work orders." Add a bonus-eligible property group filter so only properties the team is responsible for count (two clients handle their own move-ins and must be excluded). Property group should be configurable and appear as a global filter option.
+
+6. CAP KPIs PER EMPLOYEE AT 4
+Fabian currently has 7 KPIs. Limit each employee to a max of 4 weighted KPIs (3 is acceptable). Weight evenly. Move anything beyond that to an unweighted "expectations" list or drop it.
+
+7. GOOD / BETTER / BEST THRESHOLDS
+Apply these thresholds and show the current tier on each tile:
+- Rent-only delinquency (month end, exclude utilities): Good <10%, Better <5%, Best <2%
+- Vacancy time (turnover to re-lease, exclude non-revenue units): Good 30 days, Better 20, Best 10. Make these easy to tighten later to 21/14/7.
+- Owner insurance info on file: Good 70-80%, Better 80-90%, Best 90%+
+- Work order completion within 30 days: Good 80%, Better 90%, Best 95%+. Scope this to in-house techs (Bong and Scott) or at minimum split in-house vs. outside vendor completion.
+- Billable hours (Bong and Scott): keep existing tracking, confirm it reads logged time entries.
+- Building inspections: 40 / 50 / 60 as above.
+
+8. VENDOR INSURANCE KPI
+Treat any vendor whose policy expiration is more than 10 years in the future as "exempt" and exclude from the expired/missing counts. Show an exempt count separately. If a custom vendor field exists that could flag non-applicable vendors, expose an option to filter on it.
+
+9. BONUS STRUCTURE
+- Quarterly incentive: $1,000 per employee per quarter, split evenly across that employee's KPIs. Show earned vs. possible per quarter and YTD.
+- Stretch bonus: additional $1,000 at year end. Eligible only if every KPI in every quarter scored Better or Best AND at least 75% of all KPI-quarter results are Best. A single "Good" in any quarter disqualifies. Auto-populate an eligibility indicator that updates as quarters close.
+- Year-end discretionary bonus: add an owner-only scorecard of 7-10 configurable questions, each answered 0 / 1 / 2 / N/A. Score the answers and calculate a discretionary bonus against a configurable max per role (default $4,000). Only J.J. can see and answer this.
+- Make all dollar amounts and thresholds configurable in a settings/config file, not hardcoded.
+
+10. Q1-Q3 2026 RETROACTIVE VIEW
+Add a view that scores Q1, Q2, and Q3 2026 against the new thresholds so J.J. can use it to set the September discretionary bonuses.
+
+After implementing, list every file changed and confirm the removed section and Mark's data are gone from both the UI and the data layer.
