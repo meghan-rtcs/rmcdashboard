@@ -5,6 +5,7 @@
 // AppFolio endpoint via a live call, falling back gracefully when unavailable.
 import { query, queryOne } from "./db.js";
 import { appfolio } from "./appfolio.js";
+import { occupancyHistory } from "./occupancy-history.js";
 
 const num = (v) => (v == null || isNaN(v) ? 0 : Number(v));
 const round = (v, d = 1) => {
@@ -714,14 +715,7 @@ async function buildCharts() {
   }
 
   // Occupancy / delinquency trends from monthly_snapshots when present.
-  const occRows = many(
-    "SELECT month, value FROM monthly_snapshots WHERE metric = 'occupancy_rate' ORDER BY month"
-  );
-  const occMap = Object.fromEntries(occRows.map((r) => [r.month, num(r.value)]));
-  const occupancyTrend = months.map((m) => ({
-    month: m,
-    rate: round(occMap[m] || 0),
-  }));
+  const occupancyTrend = occupancyHistory(months);
 
   const delRows = many(
     "SELECT month, value FROM monthly_snapshots WHERE metric = 'delinquency_total' ORDER BY month"

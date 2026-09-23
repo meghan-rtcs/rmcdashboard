@@ -281,9 +281,10 @@
                 stroke={C.grid} strokeWidth="1" strokeDasharray={i === 0 ? "0" : "2 3"} />
             ))}
             {series.map((s, si) => {
-              const pts = data.map((d, i) => (d[s.key] != null && Number.isFinite(d[s.key])) ? [xScale(i), yScale(d[s.key])] : null).filter(Boolean);
+              const points = data.map((d, i) => (d[s.key] != null && Number.isFinite(d[s.key])) ? [xScale(i), yScale(d[s.key])] : null);
+              const pts = points.filter(Boolean);
               if (!pts.length) return null;
-              const path = pts.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+              const path = points.map((p, i) => p ? (i === 0 || !points[i - 1] ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1) : "").join(" ");
               return (
                 <g key={si}>
                   <path d={path} fill="none" stroke={s.color} strokeWidth={s.width || 2} strokeLinecap="round" strokeLinejoin="round" />
@@ -548,8 +549,8 @@
           {/* OCCUPANCY */}
           <SectionHeader title="Occupancy & Portfolio" />
           <div style={gridCols(3)}>
-            <ChartCard span={2} title="Occupancy rate — 12 months" subtitle="Trailing monthly occupancy" drill="occupancy">
-              <LineChart data={occData} height={150} yFmt={(v) => v + "%"} series={[{ key: "rate", name: "Occupancy", color: C.green, width: 2.4 }]} />
+            <ChartCard span={2} title="Occupancy rate — recorded history" subtitle="Latest recorded value per month · up to 12 months · current month updates with sync" drill="occupancy">
+              {occData.length ? <LineChart data={occData} height={150} yFmt={(v) => v + "%"} series={[{ key: "rate", name: "Occupancy", color: C.green, width: 2.4 }]} /> : <div style={{padding:35,color:C.muted,fontSize:13}}>Occupancy history will start with the next successful sync. Earlier months are not estimated.</div>}
             </ChartCard>
             <DonutCard title="Unit status" subtitle={o.totalUnits + " units · " + o.properties + " properties"} drill="units"
               data={{ Occupied: o.occupied, "Vacant — rented": o.vacantRented, "Vacant — not rented": o.vacantNotRented }}

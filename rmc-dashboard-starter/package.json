@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "test:occupancy": "RMC_DB_PATH=/tmp/rmc-occupancy-history-test.db node --test server/lib/occupancy-history.test.js",
     "start": "node server/index.js",
     "sync": "node -e \"import('./server/lib/sync.js').then(m => m.syncAll().then(r => console.log(r)))\"",
     "test": "rm -f /tmp/rmc-dashboard-kpi-test.db* && RMC_DB_PATH=/tmp/rmc-dashboard-kpi-test.db node --test server/lib/kpi.test.js && rm -f /tmp/rmc-dashboard-owner-auth-test.db* && RMC_TEST_MODE=1 DASHBOARD_PASSWORD=test-ceo-password RMC_DB_PATH=/tmp/rmc-dashboard-owner-auth-test.db node --test server/owner-auth.test.js"

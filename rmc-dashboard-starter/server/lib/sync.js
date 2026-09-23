@@ -1,6 +1,7 @@
 // ── AppFolio → SQLite sync ───────────────────────────────────────────────────
 import { appfolio } from "./appfolio.js";
 import { getDb, clearTable, upsertMany, run, query } from "./db.js";
+import { recordOccupancyMonth } from "./occupancy-history.js";
 
 const TS = () => new Date().toISOString();
 const safe = (p, fb) => p.catch(e => { console.warn("[sync] non-fatal:", e.message); return fb; });
@@ -552,6 +553,11 @@ export async function syncAll() {
     if (st.ok) totalRecords += st.rows;
     else errors.push(`google_sheet: ${st.error}`);
   } catch (e) { errors.push(`google_sheet: ${e.message}`); console.error("[sync]", e.message); }
+
+  // Only capture fresh occupancy when both source reports succeeded.
+  if (!errors.some(e => e.startsWith("rent_roll:") || e.startsWith("unit_directory:"))) {
+    recordOccupancyMonth(synced_at);
+  }
 
   // ── Sync log ────────────────────────────────────────────────────────────
   const duration = Date.now() - start;
