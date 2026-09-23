@@ -31,7 +31,10 @@ const TURNOVER_WO =
 
 export function currentQuarter() {
   const d = new Date();
-  return d.getFullYear() + "-Q" + (Math.floor(d.getMonth() / 3) + 1);
+  // Use UTC getters so this stays in sync with quarterBounds(), which uses
+  // Date.UTC. Local-time getters would disagree on non-UTC hosts around
+  // midnight on quarter boundaries.
+  return d.getUTCFullYear() + "-Q" + (Math.floor(d.getUTCMonth() / 3) + 1);
 }
 export function quarterBounds(q) {
   const m = /^(\d{4})-Q([1-4])$/.exec(String(q || ""));
@@ -573,7 +576,7 @@ export function incentiveShares(total, count) {
   return Array.from({ length: count }, (_, index) => (base + (index < remainder ? 1 : 0)) / 100);
 }
 
-export function computeTeamQuarter(quarter, propertyGroupScope = "configured") {
+export function computeTeamQuarter(quarter, propertyGroupScope = "configured", { forcePointInTime = false } = {}) {
   seedKpiConfig();
   const settings = { ...getTeamSettings() };
   if (propertyGroupScope === "all") settings.bonus_eligible_property_group = "";
@@ -593,7 +596,9 @@ export function computeTeamQuarter(quarter, propertyGroupScope = "configured") {
   // For historical quarters they only exist via a locked snapshot; computing
   // them live would score today's state as if it were the quarter's result.
   const POINT_IN_TIME = new Set(["pm_owner_insurance", "bk_delinquent_rent", "bk_vendor_ins", "bk_renters_ins"]);
-  const isCurrentQ = quarter === currentQuarter();
+  // Snapshots explicitly force these live-state metrics to be computed. This
+  // keeps a quarter-close snapshot complete if its final sync crosses midnight.
+  const isCurrentQ = forcePointInTime || quarter === currentQuarter();
 
   const kpis = configs.map((c) => {
     const emp = c.assigned_to ? empById.get(c.assigned_to) : null;
@@ -826,7 +831,7 @@ export function snapshotQuarter(quarter, replaceExisting = false) {
     err.statusCode = 409;
     throw err;
   }
-  const data = computeTeamQuarter(quarter);
+  const data = computeTeamQuarter(quarter, "configured", { forcePointInTime: true });
   // Freeze the records shown behind each KPI along with the calculated values.
   // Group membership and source rows are mutable AppFolio state, so retaining
   // only a group ID would let a historical drilldown silently change later.

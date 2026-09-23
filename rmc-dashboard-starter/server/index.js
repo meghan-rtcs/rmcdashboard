@@ -128,6 +128,7 @@ app.get("/api/owner/status", (_req, res) => {
 app.post("/api/owner/setup", requireSameOrigin, async (req, res) => {
   const attempt = ownerAttemptAllowed(req, res);
   if (!attempt) return;
+  if (ownerSetupRequired()) return res.status(409).json({ error: "Owner access has not been set up yet." });
   const password = String((req.body && req.body.password) || "");
   const confirmation = String((req.body && req.body.confirmPassword) || "");
   if (!validOwnerPassword(password) || !safeEqual(password, confirmation)) {
@@ -253,7 +254,7 @@ app.get("/api/dashboard", async (req, res) => {
 app.get("/api/drilldown/:key", async (req, res) => {
   try {
     const { getDrilldown } = await import("./lib/aggregator.js");
-    const dd = await getDrilldown(req.params.key, normalizeRange(String(req.query.range || "this_month")), String(req.query.propertyGroup || "configured"));
+    const dd = getTeamDrilldown(req.params.key, String(req.query.quarter || ""), String(req.query.propertyGroup || "configured"));
     if (!dd) return res.status(404).json({ error: "Unknown drilldown: " + req.params.key });
     res.json(dd);
   } catch (err) {
@@ -346,7 +347,9 @@ app.get("/api/team/drilldown/:key", requireOwner, async (req, res) => {
 app.post("/api/team/snapshot", requireSameOrigin, requireOwner, async (req, res) => {
   try {
     const { snapshotQuarter } = await import("./lib/kpi.js");
-    const quarter = String((req.body && req.body.quarter) || "");
+    const quarter = String(req.query.quarter || "");
+
+    const { seedKpiConfig, getTeamSettings } = await import("./lib/kpi.js");
     if (!/^\d{4}-Q[1-4]$/.test(quarter)) return res.status(400).json({ error: "Quarter must use YYYY-QN format." });
     res.json(snapshotQuarter(quarter, !!req.body.replaceExisting));
   } catch (err) {
@@ -361,7 +364,9 @@ app.get("/api/team/config", requireOwner, async (req, res) => {
     const { seedKpiConfig, getTeamSettings } = await import("./lib/kpi.js");
     seedKpiConfig();
     const configs = query("SELECT * FROM kpi_config ORDER BY department, sort").map((c) => ({ ...c, tiers: JSON.parse(c.tiers || "{}") }));
-    const roster = query("SELECT * FROM kpi_roster ORDER BY sort").map((r) => ({ ...r, allocations: JSON.parse(r.allocations || "{}") }));
+    const roster = query("SELECT id, name, role FROM kpi_roster WHERE active = 1 ORDER BY sort");
+
+    const patch = req.body || {};
     const propertyGroups = query(`SELECT pg.id, CASE WHEN instr(pg.id, ':') > 0 THEN substr(pg.id, instr(pg.id, ':') + 1) ELSE pg.id END appfolio_id,
       pg.label raw_label, pg.source_field,
       COALESCE(NULLIF(pgc.display_name,''), pg.label) label,
@@ -429,11 +434,13 @@ app.get("/api/owner/historical-adjustments", requireOwner, async (_req, res) => 
   }
 });
 
-app.get("/api/owner/scorecard", requireOwner, (req, res) => {
+app.get("/api/owner/scorecard", requireOwner, async (req, res) => {
   try {
     const quarter = String(req.query.quarter || "");
+
     if (!/^\d{4}-Q[1-4]$/.test(quarter)) return res.status(400).json({ error: "quarter must be YYYY-QN" });
     const roster = query("SELECT id, name, role FROM kpi_roster WHERE active = 1 ORDER BY sort");
+
     const reviews = query("SELECT employee_id, answers, updated_at FROM discretionary_reviews WHERE quarter = ?", [quarter])
       .map((r) => ({ ...r, answers: JSON.parse(r.answers || "[]") }));
     res.json({ quarter, roster, reviews });
@@ -583,11 +590,92 @@ async function scheduledSync() {
   }
 }
 
+// ── Scheduled quarter snapshot (calendar-aware, fires on the last day of each quarter) ─
+// Guards against the "someone forgot to click Snapshot" problem: on the final
+// day of each quarter the server automatically runs a final AppFolio sync and
+// then locks the KPI results so that retroactive edits can never silently
+// change paid bonuses.
+//
+// Design decisions:
+//   • Uses UTC throughout — currentQuarter() and quarterBounds() are both UTC-
+//     based, so today's date is compared in UTC to avoid local/UTC skew on
+//     quarter-boundary nights.
+//   • Fires at a fixed UTC wall-clock time (23:45 UTC) each day via a
+//     recursive setTimeout rather than a fixed 24-hour interval, so the check
+//     never drifts away from a calendar day boundary.
+//   • Awaits runSync() before calling snapshotQuarter() so the snapshot always
+//     captures the freshest AppFolio data; a sync already in progress is
+//     reused via the single-flight guard in runSync().
+//   • Idempotent: if a snapshot whose UTC date matches today already exists,
+//     the job skips — safe across server restarts on the last day.
+
+// Target UTC time for the daily quarter-close check.
+const SNAPSHOT_CHECK_HOUR_UTC = 23;
+const SNAPSHOT_CHECK_MIN_UTC  = 45;
+async function scheduledQuarterSnapshot() {
+  try {
+    const { snapshotQuarter, currentQuarter, quarterBounds } = await import("./lib/kpi.js");
+
+    const quarter = currentQuarter(); // UTC-based
+    const bounds  = quarterBounds(quarter);
+    if (!bounds) return;
+
+    // Last day of the quarter = one day before the exclusive end date (UTC).
+    const endExcl = new Date(bounds[1] + "T00:00:00Z");
+    endExcl.setUTCDate(endExcl.getUTCDate() - 1);
+    const lastDay = endExcl.toISOString().slice(0, 10);
+    const today   = new Date().toISOString().slice(0, 10); // UTC date
+
+    if (today !== lastDay) return; // not the last day — nothing to do
+
+    // Skip if a snapshot already exists for today (handles server restarts on
+    // the last day — no need to re-stamp an already-locked quarter).
+    const existing = query(
+      "SELECT snapshot_at FROM quarter_results WHERE quarter = ?",
+      [quarter]
+    )[0];
+    if (existing && existing.snapshot_at && existing.snapshot_at.slice(0, 10) === today) {
+      console.log(`[scheduler] Quarter ${quarter} already snapshotted today — skipping.`);
+      return;
+    }
+
+    // Run a final sync first so the snapshot captures up-to-date AppFolio data.
+    // runSync() is single-flight: if a sync is already in progress it reuses it.
+    console.log(`[scheduler] Last day of ${quarter} — running final sync before snapshot...`);
+    await runSync();
+
+    console.log(`[scheduler] Snapshotting quarter ${quarter}...`);
+    const result = snapshotQuarter(quarter);
+    console.log(`[scheduler] Quarter ${quarter} auto-snapshot complete at ${result.snapshotAt}`);
+  } catch (err) {
+    console.error("[scheduler] Quarter snapshot failed:", err.message);
+  }
+}
+
+// Schedule the check at SNAPSHOT_CHECK_HOUR_UTC:SNAPSHOT_CHECK_MIN_UTC UTC each
+// day using a recursive setTimeout so the trigger stays anchored to a fixed
+// wall-clock time rather than drifting with a setInterval.
+function scheduleNextQuarterSnapshot() {
+  const now  = new Date();
+  const next = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+    SNAPSHOT_CHECK_HOUR_UTC, SNAPSHOT_CHECK_MIN_UTC, 0, 0
+  ));
+  // If we're already past today's target time, aim for tomorrow.
+  if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+  const delay = next - now;
+  setTimeout(async () => {
+    await scheduledQuarterSnapshot();
+    scheduleNextQuarterSnapshot(); // reschedule for the next day
+  }, delay);
+}
+
 // Do not schedule external sync work when the app is imported by the isolated
 // HTTP auth tests. Normal application startup is unchanged.
 if (process.env.RMC_TEST_MODE !== "1") {
   setTimeout(scheduledSync, 5000);
   setInterval(scheduledSync, 2 * 60 * 60 * 1000);
+  scheduleNextQuarterSnapshot();
   app.listen(PORT, () => {
     console.log(`RMC Dashboard running on port ${PORT}`);
   });
