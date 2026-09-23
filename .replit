@@ -42,3 +42,7 @@ run = ["bash", "-c", "PORT=5000 npm start --prefix rmc-dashboard-starter"]
 
 [userenv.shared]
 DASHBOARD_PASSWORD = "B8GKjhUVMS9E!e&PwHDE"
+
+[postMerge]
+path = "rmc-dashboard-starter/scripts/post-merge.sh"
+timeoutMs = 180000
