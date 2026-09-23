@@ -310,6 +310,13 @@ function migrate() {
       property_id TEXT NOT NULL,
       PRIMARY KEY (group_id, property_id)
     );
+    -- Owner labels are deliberately separate from the discovered-group table:
+    -- a property sync replaces discovery rows, but must never erase a label.
+    CREATE TABLE IF NOT EXISTS property_group_config (
+      group_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_property_group_members_property ON property_group_members(property_id);
 
     -- Security deposits (from security_deposit_funds_detail)
@@ -410,6 +417,7 @@ function migrate() {
   addCol("properties", "group_labels", "TEXT");
   addCol("vendors", "custom_fields", "TEXT");
   addCol("units", "rentable", "TEXT");
+  addCol("kpi_config", "property_group_override", "TEXT");
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

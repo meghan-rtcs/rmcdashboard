@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { app } from "./index.js";
-import { queryOne } from "./lib/db.js";
+import { queryOne, run } from "./lib/db.js";
 
 const CEO_PASSWORD = process.env.DASHBOARD_PASSWORD;
 const CEO_VIEW_PASSWORD = "RTCS"; // Existing client-side CEO View credential.
@@ -100,6 +100,15 @@ test("owner setup, separate sessions, reset, and owner API authorization", async
   });
   assert.equal(ceoLogin.status, 200);
   const ceoCookie = cookie(ceoLogin);
+  result = await json(await request("/api/owner/session", {}, ceoCookie));
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body, { owner: false }, "CEO access must not be reported as owner access");
+  result = await json(await request("/api/labor-adjustments", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ period: "2026-07", tech: "Scott Scott", pto_hours: 64, extra_hours: 0 }),
+  }, ceoCookie));
+  assert.equal(result.response.status, 403);
+  assert.deepEqual(result.body, { error: "Owner sign-in required" });
   for (const path of [
     "/api/team",
     "/api/team/drilldown/team_pm_owner_insurance",
@@ -115,7 +124,8 @@ test("owner setup, separate sessions, reset, and owner API authorization", async
     ["/api/owner/settings", {}],
     ["/api/labor-adjustments", { period: "2026-07", tech: "Test", pto_hours: 0, extra_hours: 0 }],
     ["/api/owner/scorecard", { quarter: "2026-Q3", employee_id: "john", answers: [] }],
-    ["/api/team/config", { id: "pm_vacancy_days", active: true }],
+    ["/api/team/config", { id: "pm_vacancy_days", property_group_override: "group:http-contract" }],
+    ["/api/team/property-group-label", { group_id: "group:http-contract", display_name: "Quality Turns" }],
     ["/api/team/override", { quarter: "2026-Q3", employee: "Bong", scheduled_hours: 160 }],
     ["/api/team/snapshot", { quarter: "2026-Q3" }],
   ]) {
@@ -127,7 +137,105 @@ test("owner setup, separate sessions, reset, and owner API authorization", async
 
   // Owner access is additive: a dashboard session never becomes an owner
   // session, and the owner cookie is required alongside the normal gate.
-  assert.equal((await request("/api/team/config", {}, `${ceoCookie}; ${ownerCookie}`)).status, 200);
+  const authorizedCookies = `${ceoCookie}; ${ownerCookie}`;
+  assert.equal((await request("/api/team/config", {}, authorizedCookies)).status, 200);
+  result = await json(await request("/api/owner/session", {}, authorizedCookies));
+  assert.deepEqual(result.body, { owner: true });
+
+  // Item 3 contract: a discovered AppFolio group can be assigned per KPI,
+  // cleared back to global inheritance, and given an owner-managed display name.
+  const groupId = "group:http-contract";
+  run("INSERT INTO property_groups (id, label, source_field, synced_at) VALUES (?, ?, ?, ?)",
+    [groupId, "AppFolio group HTTP contract", "property_group_id", new Date().toISOString()]);
+
+  result = await json(await request("/api/team/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "pm_vacancy_days", property_group_override: groupId }),
+  }, authorizedCookies));
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body, { ok: true });
+
+  result = await json(await request("/api/team/config", {}, authorizedCookies));
+  let vacancyConfig = result.body.configs.find((config) => config.id === "pm_vacancy_days");
+  assert.equal(vacancyConfig.property_group_override, groupId);
+
+  result = await json(await request("/api/team/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "pm_vacancy_days", property_group_override: null }),
+  }, authorizedCookies));
+  assert.equal(result.response.status, 200);
+  result = await json(await request("/api/team/config", {}, authorizedCookies));
+  vacancyConfig = result.body.configs.find((config) => config.id === "pm_vacancy_days");
+  assert.equal(vacancyConfig.property_group_override, null);
+
+  const beforeRejectedUpdate = {
+    active: vacancyConfig.active,
+    tiers: vacancyConfig.tiers,
+    property_group_override: vacancyConfig.property_group_override,
+  };
+  result = await json(await request("/api/team/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: "pm_vacancy_days",
+      property_group_override: "group:not-discovered",
+      active: !Boolean(vacancyConfig.active),
+      tiers: {
+        good: { threshold: null, payout: 123 },
+        better: { threshold: null, payout: 123 },
+        best: { threshold: null, payout: 123 },
+      },
+    }),
+  }, authorizedCookies));
+  assert.equal(result.response.status, 400);
+  assert.match(result.body.error, /not discovered/i);
+  result = await json(await request("/api/team/config", {}, authorizedCookies));
+  vacancyConfig = result.body.configs.find((config) => config.id === "pm_vacancy_days");
+  assert.deepEqual({
+    active: vacancyConfig.active,
+    tiers: vacancyConfig.tiers,
+    property_group_override: vacancyConfig.property_group_override,
+  }, beforeRejectedUpdate, "unknown group validation must happen before tiers or active are changed");
+
+  result = await json(await request("/api/team/property-group-label", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ group_id: groupId, display_name: "Quality Turns" }),
+  }, authorizedCookies));
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body, { ok: true });
+
+  result = await json(await request("/api/owner/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bonus_eligible_property_group: groupId }),
+  }, authorizedCookies));
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.settings.bonus_eligible_property_group, groupId);
+
+  // This directory endpoint requires only the normal dashboard session, not
+  // the separate Owner cookie, and exposes both the friendly and raw labels.
+  result = await json(await request("/api/property-groups", {}, ceoCookie));
+  assert.equal(result.response.status, 200);
+  const displayedGroup = result.body.groups.find((group) => group.id === groupId);
+  assert.deepEqual(displayedGroup, {
+    id: groupId,
+    appfolio_id: "http-contract",
+    raw_label: "AppFolio group HTTP contract",
+    source_field: "property_group_id",
+    label: "Quality Turns",
+  });
+
+  result = await json(await request("/api/labor-adjustments", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ period: "2026-07", tech: "Scott Scott", pto_hours: 745, extra_hours: 0 }),
+  }, authorizedCookies));
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error, "PTO / Sick hours for Scott Scott must be between 0 and 744.");
+
+  result = await json(await request("/api/owner/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quarterly_incentive: -1 }),
+  }, authorizedCookies));
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error, "Quarterly incentive must be a non-negative number.");
 
   result = await json(await request("/api/owner/reset", {
     method: "POST", headers: { "Content-Type": "application/json" },

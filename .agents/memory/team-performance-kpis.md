@@ -21,3 +21,9 @@ description: Durable rules behind the Team Performance tab — quarter locking, 
 - Bonus eligibility defaults to all properties until the owner selects an AppFolio group. The verified report exposes comma-separated property_group_id values but not group names.
   **Why:** the eligible group did not yet exist when requested; names or client exclusions must not be guessed.
   **How to apply:** use exact ID membership, transparent ID labels, and never treat a missing selected group as all properties.
+- Per-KPI property-group overrides inherit the global selection when unset. The client intends to narrow Clean Move-ins to a “Quality Turns” group, not narrow the rest of the portfolio.
+  **Why:** some clients control their own turns; those properties should not penalize the maintenance team. The intended group ID has not been provided and must not be guessed.
+  **How to apply:** keep assignments configurable, preserve owner-entered names across discovery syncs, and report unavailable rather than fabricate scoped results for unattributable data.
+- Locked historical drilldowns must use captured evidence, never present-day configuration or group membership. Legacy snapshots lacking that evidence must explicitly show it as unavailable.
+  **Why:** preserving only a group ID does not preserve the original property set after membership changes.
+  **How to apply:** freeze drilldown evidence alongside new snapshots; retroactive threshold scoring must not change captured values or scope.

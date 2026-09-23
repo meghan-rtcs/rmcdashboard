@@ -241,20 +241,22 @@ export function seedKpiConfig() {
   run("UPDATE kpi_config SET label = ?, description = ?, assigned_to = 'john' WHERE id = 'pm_inspections'",
     ["Building Inspections (Units / Month)", "Average units inspected each month from Building Walkthroughs. John is accountable; Scott and Bong are contributors."]);
   run("UPDATE kpi_config SET label = ?, description = ? WHERE id = 'mnt_clean_movein'",
-    ["Move-ins with no work orders", "Percent of move-ins in the owner-selected bonus-eligible property group with zero non-turnover work orders in the first 30 days."]);
+    ["Move-ins with no work orders", "Percent of counted move-ins with zero non-turnover work orders in the first 30 days. Property scope follows this KPI's override or inherits the global setting."]);
 }
 
 // ── KPI value computation ───────────────────────────────────────────────────
 // Each computer returns { value, detail?, dataQuality? } for a quarter window.
 
-function kpiVacancyDays(qs, qe) {
+function kpiVacancyDays(qs, qe, scope) {
+  const group = selectedGroupClause("p", scope.id);
   // Gap = new tenant move_in minus previous occupancy's move_out (or lease_end)
   // on the same unit, for move-ins inside the quarter. Non-revenue excluded.
   const leases = many(
     `SELECT lh.unit_id, lh.move_in FROM lease_history lh
      JOIN units u ON u.id = lh.unit_id
-     WHERE lh.move_in >= ? AND lh.move_in < ? AND lh.unit_id != '' AND ${REVENUE_UNIT}`,
-    [qs, qe]
+     LEFT JOIN properties p ON p.id = u.property_id
+     WHERE lh.move_in >= ? AND lh.move_in < ? AND lh.unit_id != '' AND ${REVENUE_UNIT}${group.sql}`,
+    [qs, qe, ...group.params]
   );
   const gaps = [];
   for (const l of leases) {
@@ -276,8 +278,10 @@ function kpiVacancyDays(qs, qe) {
   };
 }
 
-function kpiOwnerInsurance() {
-  const total = num(one("SELECT COUNT(*) c FROM properties WHERE TRIM(COALESCE(property_name,'')) != ''").c);
+function kpiOwnerInsurance(scope) {
+  const group = selectedGroupClause("p", scope.id);
+  const total = num(one(`SELECT COUNT(*) c FROM properties p
+    WHERE TRIM(COALESCE(property_name,'')) != ''${group.sql}`, group.params).c);
   const covered = num(one(
     `SELECT COUNT(*) c FROM properties p
      WHERE TRIM(COALESCE(p.property_name,'')) != ''
@@ -289,8 +293,8 @@ function kpiOwnerInsurance() {
               lower(trim(oi.properties)) = lower(trim(p.property_name))
               OR instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
                        ',' || lower(trim(p.property_name)) || ',') > 0
-            )
-       )`).c);
+             )
+        )${group.sql}`, group.params).c);
   return {
     value: total ? round((covered / total) * 100) : null,
     detail: covered + " of " + total + " properties covered by an active policy",
@@ -304,8 +308,32 @@ function selectedGroupClause(alias, groupId) {
   return { sql: ` AND EXISTS (SELECT 1 FROM property_group_members pgm WHERE pgm.group_id = ? AND pgm.property_id = ${alias}.id)`, params: [groupId] };
 }
 
-function kpiCleanMoveIn(qs, qe, settings) {
-  const group = selectedGroupClause("p", settings.bonus_eligible_property_group);
+function groupInfo(groupId) {
+  if (!groupId) return { id: null, label: "All properties", rawId: null, valid: true };
+  const row = one(`SELECT pg.id, pg.label raw_label, COALESCE(NULLIF(pgc.display_name,''), pg.label) label
+    FROM property_groups pg LEFT JOIN property_group_config pgc ON pgc.group_id = pg.id WHERE pg.id = ?`, [groupId]);
+  return row.id
+    ? { id: row.id, label: row.label, rawId: row.id.includes(":") ? row.id.slice(row.id.indexOf(":") + 1) : row.id, valid: true }
+    : { id: groupId, label: "Unavailable property group", rawId: groupId, valid: false };
+}
+
+function effectiveScope(config, settings) {
+  const override = config.property_group_override || null;
+  const info = groupInfo(override || settings.bonus_eligible_property_group || null);
+  return { ...info, source: override ? "kpi_override" : (settings.bonus_eligible_property_group ? "global" : "all"),
+    differsFromGlobal: !!override && override !== (settings.bonus_eligible_property_group || null) };
+}
+
+function unavailableScopedMetric(scope, reason) {
+  return {
+    value: null,
+    detail: "Unavailable for property-scoped calculation",
+    dataQuality: `${reason} The ${scope.label} scope was not silently ignored.`,
+  };
+}
+
+function kpiCleanMoveIn(qs, qe, scope) {
+  const group = selectedGroupClause("p", scope.id);
   const rows = many(
     `SELECT u.id, SUM(CASE WHEN w.id IS NOT NULL AND NOT ${TURNOVER_WO} THEN 1 ELSE 0 END) wo_count
      FROM units u
@@ -325,15 +353,16 @@ function kpiCleanMoveIn(qs, qe, settings) {
   };
 }
 
-function kpiWo30Days(qs, qe) {
+function kpiWo30Days(qs, qe, scope) {
+  const group = selectedGroupClause("p", scope.id);
   const r = one(
     `SELECT COUNT(*) total,
             SUM(CASE WHEN julianday(completed_date) - julianday(created_date) <= 30 THEN 1 ELSE 0 END) fast
-     FROM work_orders
+     FROM work_orders w LEFT JOIN properties p ON p.id = w.property_id
       WHERE completed_date != '' AND created_date != '' AND completed_date >= created_date
         AND completed_date >= ? AND completed_date < ?
-        AND (LOWER(COALESCE(assigned_user,'')) LIKE '%bong%' OR LOWER(COALESCE(assigned_user,'')) LIKE '%scott%')`,
-    [qs, qe]
+         AND (LOWER(COALESCE(assigned_user,'')) LIKE '%bong%' OR LOWER(COALESCE(assigned_user,'')) LIKE '%scott%')${group.sql}`,
+    [qs, qe, ...group.params]
   );
   // Data-quality: work orders stuck in New/Assigned for 30+ days suggest
   // statuses aren't being moved, which silently skews completion metrics.
@@ -424,7 +453,8 @@ function kpiUtilization(qs, qe, quarter, employeeName) {
   };
 }
 
-function kpiInspections(qs, qe) {
+function kpiInspections(qs, qe, scope) {
+  const group = selectedGroupClause("p", scope.id);
   // Units credited: sum of unit_count for properties with a Building
   // Walkthrough completed in the quarter (deduped per property).
   const rows = many(
@@ -434,9 +464,9 @@ function kpiInspections(qs, qe) {
      LEFT JOIN properties p ON p.id = i.property_id
      WHERE LOWER(i.inspection_name) LIKE '%building walkthrough%'
        AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) >= ?
-       AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) < ?
+        AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) < ?${group.sql}
      GROUP BY i.property_id`,
-    [qs, qe]
+    [qs, qe, ...group.params]
   );
   const units = rows.reduce((s, r) => s + num(r.unit_count), 0);
   const months = Math.max(1, Math.round((new Date(qe) - new Date(qs)) / 2629800000));
@@ -449,11 +479,16 @@ function kpiInspections(qs, qe) {
   };
 }
 
-function kpiDelinquentRent() {
+function kpiDelinquentRent(scope) {
   // Rent-only delinquency: utility billbacks and other non-rent charge types
   // excluded by construction (receivable_charges categorizes each charge).
-  const r = one("SELECT SUM(amount_receivable) s, COUNT(DISTINCT COALESCE(NULLIF(occupancy_id,''), payer_name)) c FROM receivable_charges WHERE charge_category = 'Rent'");
-  const rent = num(one("SELECT SUM(current_rent) s FROM units WHERE current_rent > 0").s);
+  const chargeGroup = selectedGroupClause("p", scope.id);
+  const unitGroup = selectedGroupClause("p", scope.id);
+  const r = one(`SELECT SUM(rc.amount_receivable) s, COUNT(DISTINCT COALESCE(NULLIF(rc.occupancy_id,''), rc.payer_name)) c
+    FROM receivable_charges rc LEFT JOIN properties p ON p.id = rc.property_id
+    WHERE rc.charge_category = 'Rent'${chargeGroup.sql}`, chargeGroup.params);
+  const rent = num(one(`SELECT SUM(u.current_rent) s FROM units u LEFT JOIN properties p ON p.id = u.property_id
+    WHERE u.current_rent > 0${unitGroup.sql}`, unitGroup.params).s);
   return { value: rent ? round((num(r.s) / rent) * 100, 2) : null,
     detail: num(r.c) + " accounts owing rent; " + (rent ? "$" + round(num(r.s), 2) + " / $" + round(rent, 2) + " monthly rent" : "monthly rent denominator unavailable"),
     dataQuality: "Provisional current-state reading — capture a locked month-end/quarter-end result before treating delinquency as final." };
@@ -478,27 +513,38 @@ function kpiVendorIns(settings) {
     detail: current + " of " + counted.length + " active vendors current; " + exempt + " exempt" };
 }
 
-function kpiRentersIns() {
-  const total = num(one("SELECT COUNT(*) c FROM tenant_insurance WHERE status = 'Current'").c);
+function kpiRentersIns(scope) {
+  const group = selectedGroupClause("p", scope.id);
+  const total = num(one(`SELECT COUNT(*) c FROM tenant_insurance ti
+    LEFT JOIN properties p ON lower(trim(p.property_name)) = lower(trim(ti.property_name))
+    WHERE ti.status = 'Current'${group.sql}`, group.params).c);
   const tracked = num(one(
-    "SELECT COUNT(*) c FROM tenant_insurance WHERE status = 'Current' AND insurance_expiration != ''").c);
+    `SELECT COUNT(*) c FROM tenant_insurance ti
+     LEFT JOIN properties p ON lower(trim(p.property_name)) = lower(trim(ti.property_name))
+     WHERE ti.status = 'Current' AND ti.insurance_expiration != ''${group.sql}`, group.params).c);
   return { value: total ? round((tracked / total) * 100) : null, detail: tracked + " of " + total + " current tenants tracked" };
 }
 
 const COMPUTERS = {
-  pm_vacancy_days: (qs, qe) => kpiVacancyDays(qs, qe),
-  pm_owner_insurance: () => kpiOwnerInsurance(),
+  pm_vacancy_days: (qs, qe, q, emp, settings, scope) => kpiVacancyDays(qs, qe, scope),
+  pm_owner_insurance: (qs, qe, q, emp, settings, scope) => kpiOwnerInsurance(scope),
   pm_days_on_market: () => ({ value: null, detail: "Not yet configured" }),
   pm_days_to_lease: () => ({ value: null, detail: "Not yet configured" }),
-  pm_inspections: (qs, qe) => kpiInspections(qs, qe),
-  mnt_clean_movein: (qs, qe, q, emp, settings) => kpiCleanMoveIn(qs, qe, settings),
-  mnt_wo_30days: (qs, qe) => kpiWo30Days(qs, qe),
+  pm_inspections: (qs, qe, q, emp, settings, scope) => kpiInspections(qs, qe, scope),
+  mnt_clean_movein: (qs, qe, q, emp, settings, scope) => kpiCleanMoveIn(qs, qe, scope),
+  mnt_wo_30days: (qs, qe, q, emp, settings, scope) => kpiWo30Days(qs, qe, scope),
   mnt_wo_ttc: () => ({ value: null, detail: "Not yet configured" }),
-  mnt_util_bong: (qs, qe, q, emp) => kpiUtilization(qs, qe, q, emp),
-  mnt_util_scott: (qs, qe, q, emp) => kpiUtilization(qs, qe, q, emp),
-  bk_delinquent_rent: () => kpiDelinquentRent(),
-  bk_vendor_ins: (qs, qe, q, emp, settings) => kpiVendorIns(settings),
-  bk_renters_ins: () => kpiRentersIns(),
+  mnt_util_bong: (qs, qe, q, emp, settings, scope) => scope.id
+    ? unavailableScopedMetric(scope, "Approved sheet hours and PTO/scheduled-hour adjustments have no reliable property ID.")
+    : kpiUtilization(qs, qe, q, emp),
+  mnt_util_scott: (qs, qe, q, emp, settings, scope) => scope.id
+    ? unavailableScopedMetric(scope, "Approved sheet hours and PTO/scheduled-hour adjustments have no reliable property ID.")
+    : kpiUtilization(qs, qe, q, emp),
+  bk_delinquent_rent: (qs, qe, q, emp, settings, scope) => kpiDelinquentRent(scope),
+  bk_vendor_ins: (qs, qe, q, emp, settings, scope) => scope.id
+    ? unavailableScopedMetric(scope, "Vendor records are not attributable to properties.")
+    : kpiVendorIns(settings),
+  bk_renters_ins: (qs, qe, q, emp, settings, scope) => kpiRentersIns(scope),
 };
 
 // ── Tier scoring ────────────────────────────────────────────────────────────
@@ -551,14 +597,17 @@ export function computeTeamQuarter(quarter, propertyGroupScope = "configured") {
 
   const kpis = configs.map((c) => {
     const emp = c.assigned_to ? empById.get(c.assigned_to) : null;
+    const propertyScope = effectiveScope(c, settings);
     let comp = { value: null, detail: null };
     if (c.active) {
-      if (!isCurrentQ && POINT_IN_TIME.has(c.id)) {
+      if (!propertyScope.valid) {
+        comp = unavailableScopedMetric(propertyScope, `Configured group ID ${propertyScope.rawId} is not present in the latest verified property directory.`);
+      } else if (!isCurrentQ && POINT_IN_TIME.has(c.id)) {
         comp = { value: null, detail: "Point-in-time metric — not measurable for a past quarter without a locked snapshot",
           dataQuality: "This KPI reflects live AppFolio state. Snapshot each quarter before it closes to preserve its value." };
       } else {
         const fn = COMPUTERS[c.id];
-        comp = fn ? fn(qs, qe, quarter, emp ? emp.name : null, settings) : { value: null, detail: "No computation wired for this KPI" };
+        comp = fn ? fn(qs, qe, quarter, emp ? emp.name : null, settings, propertyScope) : { value: null, detail: "No computation wired for this KPI" };
       }
     }
     const configured = ["good", "better", "best"].some((t) => c.tiers[t] && c.tiers[t].threshold != null);
@@ -569,6 +618,7 @@ export function computeTeamQuarter(quarter, propertyGroupScope = "configured") {
       dataSource: c.data_source, direction: c.direction, unit: c.unit,
       tiers: c.tiers, active: !!c.active, configured,
       value: comp.value, detail: comp.detail || null, dataQuality: comp.dataQuality || null,
+      propertyScope,
       tier, payout: 0, maxPayout: 0,
       drill: "team_" + c.id,
     };
@@ -777,6 +827,26 @@ export function snapshotQuarter(quarter, replaceExisting = false) {
     throw err;
   }
   const data = computeTeamQuarter(quarter);
+  // Freeze the records shown behind each KPI along with the calculated values.
+  // Group membership and source rows are mutable AppFolio state, so retaining
+  // only a group ID would let a historical drilldown silently change later.
+  data.snapshotDrilldowns = {};
+  for (const kpi of data.kpis || []) {
+    if (kpi.value == null) {
+      data.snapshotDrilldowns[kpi.id] = {
+        title: `${kpi.label} — ${quarter}`,
+        cols: [], rows: [], propertyScope: kpi.propertyScope,
+        scopeNotice: "This KPI value was unavailable when the snapshot was taken. Current live records are not substituted.",
+        historicalUnavailable: true,
+      };
+    } else {
+      const drilldown = getTeamDrilldown(kpi.drill, quarter, "configured", {
+        ignoreSnapshot: true,
+        forcedScope: kpi.propertyScope,
+      });
+      if (drilldown) data.snapshotDrilldowns[kpi.id] = drilldown;
+    }
+  }
   run(`INSERT INTO quarter_results (quarter, payload, snapshot_at) VALUES (?, ?, ?)
        ON CONFLICT(quarter) DO UPDATE SET payload = excluded.payload, snapshot_at = excluded.snapshot_at`,
     [quarter, JSON.stringify(data), new Date().toISOString()]);
@@ -786,22 +856,56 @@ export function snapshotQuarter(quarter, replaceExisting = false) {
 // ── Drilldowns ──────────────────────────────────────────────────────────────
 
 const LIM = 500;
-export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured") {
+export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured", options = {}) {
   seedKpiConfig();
   quarter = normalizeQuarter(quarter);
   const [qs, qe] = quarterBounds(quarter);
+  const id = key.replace(/^team_/, "");
   const settings = { ...getTeamSettings() };
   if (propertyGroupScope === "all") settings.bonus_eligible_property_group = "";
   else if (propertyGroupScope && propertyGroupScope !== "configured") settings.bonus_eligible_property_group = propertyGroupScope;
-  const id = key.replace(/^team_/, "");
-  const mk = (title, cols, rows) => ({ title: title + " — " + quarter, cols, rows });
+  const config = one("SELECT * FROM kpi_config WHERE id = ?", [id]);
+  let propertyScope = options.forcedScope || effectiveScope(config, settings);
+  const locked = options.ignoreSnapshot ? {} : one("SELECT payload FROM quarter_results WHERE quarter = ?", [quarter]);
+  if (locked.payload && quarter !== currentQuarter()) {
+    try {
+      const payload = JSON.parse(locked.payload);
+      const frozenDrilldown = payload.snapshotDrilldowns?.[id];
+      if (frozenDrilldown) return JSON.parse(JSON.stringify(frozenDrilldown));
+      const frozenKpi = (payload.kpis || []).find((k) => k.id === id);
+      const scopeText = frozenKpi?.propertyScope
+        ? `Captured scope: ${frozenKpi.propertyScope.label}${frozenKpi.propertyScope.rawId ? ` (raw ID: ${frozenKpi.propertyScope.rawId})` : ""}.`
+        : "The historical property scope was not captured.";
+      return {
+        title: `Historical drilldown unavailable — ${quarter}`,
+        cols: [],
+        rows: [],
+        propertyScope: frozenKpi?.propertyScope || null,
+        scopeNotice: `${scopeText} This older snapshot did not capture its drilldown records, so current configuration, group membership, and live source rows are not substituted.`,
+        historicalUnavailable: true,
+      };
+    } catch {
+      return {
+        title: `Historical drilldown unavailable — ${quarter}`,
+        cols: [], rows: [], propertyScope: null, historicalUnavailable: true,
+        scopeNotice: "The locked snapshot cannot be read. Live records are not substituted for historical evidence.",
+      };
+    }
+  }
+  const group = selectedGroupClause("p", propertyScope.id);
+  const mk = (title, cols, rows, notice = null) => ({
+    title: title + " — " + quarter, cols, rows, propertyScope,
+    scopeNotice: notice || (propertyScope.id ? `Counted property scope: ${propertyScope.label} (raw ID: ${propertyScope.rawId})` : "Counted property scope: All properties"),
+  });
+  if (!propertyScope.valid) return mk("Property scope unavailable", [], [],
+    `Configured group ID ${propertyScope.rawId} is not present in the latest property directory. No properties were substituted.`);
   switch (id) {
     case "pm_vacancy_days": {
       const leases = many(
         `SELECT lh.property_name, lh.unit_name, lh.tenant_name, lh.move_in, lh.unit_id FROM lease_history lh
-         JOIN units u ON u.id = lh.unit_id
-         WHERE lh.move_in >= ? AND lh.move_in < ? AND lh.unit_id != '' AND ${REVENUE_UNIT}
-         ORDER BY lh.move_in DESC LIMIT ${LIM}`, [qs, qe]);
+         JOIN units u ON u.id = lh.unit_id LEFT JOIN properties p ON p.id = u.property_id
+          WHERE lh.move_in >= ? AND lh.move_in < ? AND lh.unit_id != '' AND ${REVENUE_UNIT}${group.sql}
+          ORDER BY lh.move_in DESC LIMIT ${LIM}`, [qs, qe, ...group.params]);
       const rows = leases.map((l) => {
         const prev = one(
           `SELECT COALESCE(NULLIF(move_out,''), lease_end) prev_end FROM lease_history
@@ -818,11 +922,16 @@ export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured"
         { key: "move_in", label: "Move-in" }, { key: "gap_days", label: "Vacant Days" }], rows);
     }
     case "pm_owner_insurance":
-      return mk("Owner Insurance Policies", [
-        { key: "provider", label: "Provider" }, { key: "policy_number", label: "Policy #" },
-        { key: "type", label: "Type" }, { key: "properties", label: "Properties" },
-        { key: "expiration_date", label: "Expires" }],
-        many(`SELECT provider, policy_number, type, properties, expiration_date FROM owner_insurance ORDER BY expiration_date LIMIT ${LIM}`));
+      return mk("Owner Insurance by Property", [
+        { key: "property_name", label: "Property" }, { key: "covered", label: "Current Coverage" }],
+        many(`SELECT p.property_name,
+          CASE WHEN EXISTS (SELECT 1 FROM owner_insurance oi WHERE oi.properties != ''
+            AND COALESCE(oi.expiration_date,'') != '' AND date(oi.expiration_date) >= date('now')
+            AND (lower(trim(oi.properties)) = lower(trim(p.property_name))
+              OR instr(',' || lower(replace(oi.properties, ', ', ',')) || ',',
+                       ',' || lower(trim(p.property_name)) || ',') > 0)) THEN 'Yes' ELSE 'No' END covered
+          FROM properties p WHERE TRIM(COALESCE(p.property_name,'')) != ''${group.sql}
+          ORDER BY p.property_name LIMIT ${LIM}`, group.params));
     case "pm_inspections": {
       const rows = many(
         `SELECT i.property_name, COALESCE(p.unit_count, 0) unit_count,
@@ -831,8 +940,8 @@ export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured"
          FROM inspections i LEFT JOIN properties p ON p.id = i.property_id
          WHERE LOWER(i.inspection_name) LIKE '%building walkthrough%'
            AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) >= ?
-           AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) < ?
-         GROUP BY i.property_id ORDER BY inspected DESC LIMIT ${LIM}`, [qs, qe]);
+            AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) < ?${group.sql}
+          GROUP BY i.property_id ORDER BY inspected DESC LIMIT ${LIM}`, [qs, qe, ...group.params]);
       // Rolling YTD % of portfolio
       const yStart = quarter.slice(0, 4) + "-01-01";
       const ytdUnits = num(one(
@@ -840,15 +949,16 @@ export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured"
            SELECT COALESCE(p.unit_count, 0) uc FROM inspections i
            LEFT JOIN properties p ON p.id = i.property_id
            WHERE LOWER(i.inspection_name) LIKE '%building walkthrough%'
-             AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) >= ?
-           GROUP BY i.property_id)`, [yStart]).s);
-      const totalUnits = num(one("SELECT COUNT(*) c FROM units").c);
+              AND COALESCE(NULLIF(i.marked_done_on,''), i.inspected_on) >= ?${group.sql}
+            GROUP BY i.property_id)`, [yStart, ...group.params]).s);
+      const unitGroup = selectedGroupClause("p", propertyScope.id);
+      const totalUnits = num(one(`SELECT COUNT(*) c FROM units u LEFT JOIN properties p ON p.id = u.property_id
+        WHERE 1=1${unitGroup.sql}`, unitGroup.params).c);
       const pct = totalUnits ? round((ytdUnits / totalUnits) * 100) : 0;
-      return { title: `Building Walkthroughs — ${quarter} (YTD: ${ytdUnits} units = ${pct}% of portfolio)`,
-        cols: [
+      return mk(`Building Walkthroughs (YTD: ${ytdUnits} units = ${pct}% of portfolio)`, [
           { key: "property_name", label: "Property" }, { key: "unit_count", label: "Units Credited" },
           { key: "inspected", label: "Inspection Date" }, { key: "inspection_rows", label: "Walkthroughs" }],
-        rows };
+        rows);
     }
     case "mnt_clean_movein":
       return mk("Move-ins & Non-turnover Work Orders", [
@@ -863,21 +973,21 @@ export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured"
            LEFT JOIN work_orders w ON w.unit_id = u.id AND w.created_date != ''
              AND w.created_date >= u.move_in_date AND w.created_date <= date(u.move_in_date, '+30 days')
             LEFT JOIN properties p ON p.id = u.property_id
-            WHERE u.move_in_date >= ? AND u.move_in_date < ? AND ${REVENUE_UNIT}${selectedGroupClause("p", settings.bonus_eligible_property_group).sql}
-            GROUP BY u.id ORDER BY u.move_in_date DESC LIMIT ${LIM}`, [qs, qe, ...selectedGroupClause("p", settings.bonus_eligible_property_group).params]));
+            WHERE u.move_in_date >= ? AND u.move_in_date < ? AND ${REVENUE_UNIT}${group.sql}
+            GROUP BY u.id ORDER BY u.move_in_date DESC LIMIT ${LIM}`, [qs, qe, ...group.params]));
     case "mnt_wo_30days":
       return mk("Work Orders Completed in Quarter", [
         { key: "property_name", label: "Property" }, { key: "unit", label: "Unit" },
         { key: "description", label: "Description" }, { key: "created_date", label: "Created" },
         { key: "completed_date", label: "Completed" }, { key: "days", label: "Days" }],
         many(
-          `SELECT property_name, unit, description, created_date, completed_date,
-                  CAST(julianday(completed_date) - julianday(created_date) AS INTEGER) days
-           FROM work_orders
-           WHERE completed_date != '' AND created_date != '' AND completed_date >= created_date
-             AND completed_date >= ? AND completed_date < ?
-              AND (LOWER(COALESCE(assigned_user,'')) LIKE '%bong%' OR LOWER(COALESCE(assigned_user,'')) LIKE '%scott%')
-           ORDER BY days DESC LIMIT ${LIM}`, [qs, qe]));
+          `SELECT w.property_name, w.unit, w.description, w.created_date, w.completed_date,
+                  CAST(julianday(w.completed_date) - julianday(w.created_date) AS INTEGER) days
+           FROM work_orders w LEFT JOIN properties p ON p.id = w.property_id
+           WHERE w.completed_date != '' AND w.created_date != '' AND w.completed_date >= w.created_date
+              AND w.completed_date >= ? AND w.completed_date < ?
+               AND (LOWER(COALESCE(w.assigned_user,'')) LIKE '%bong%' OR LOWER(COALESCE(w.assigned_user,'')) LIKE '%scott%')${group.sql}
+            ORDER BY days DESC LIMIT ${LIM}`, [qs, qe, ...group.params]));
     case "sheet_hours": {
       // Audit/reconciliation view: every sheet row in the quarter with its
       // approval status, so pending vs counted hours are transparent.
@@ -897,6 +1007,8 @@ export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured"
     }
     case "mnt_util_bong":
     case "mnt_util_scott": {
+      if (propertyScope.id) return mk("Labor Entries", [], [],
+        "This KPI cannot be computed for a property group: approved sheet hours and PTO/scheduled-hour adjustments have no reliable property ID. No unscoped rows are shown.");
       const emp = id === "mnt_util_bong" ? "Bong" : "Scott";
       return mk("Labor Entries — " + emp, [
         { key: "work_date", label: "Date" }, { key: "property_name", label: "Property" },
@@ -913,11 +1025,14 @@ export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured"
         { key: "property_name", label: "Property" }, { key: "unit_name", label: "Unit" },
         { key: "payer_name", label: "Tenant" }, { key: "posting_date", label: "Posted" },
         { key: "amount_receivable", label: "Amount Due", money: true }],
-        many(`SELECT property_name, unit_name, payer_name, posting_date, amount_receivable
-              FROM receivable_charges WHERE charge_category = 'Rent' AND amount_receivable != 0
-              ORDER BY amount_receivable DESC LIMIT ${LIM}`));
+        many(`SELECT rc.property_name, rc.unit_name, rc.payer_name, rc.posting_date, rc.amount_receivable
+              FROM receivable_charges rc LEFT JOIN properties p ON p.id = rc.property_id
+              WHERE rc.charge_category = 'Rent' AND rc.amount_receivable != 0${group.sql}
+              ORDER BY rc.amount_receivable DESC LIMIT ${LIM}`, group.params));
     case "bk_vendor_ins":
       {
+        if (propertyScope.id) return mk("Vendors — Liability Insurance", [], [],
+          "Vendor records have no property attribution, so this KPI is unavailable for the selected property group. No unscoped vendor rows are shown.");
         const key = String(settings.vendor_exemption_field || "");
         const rows = many(`SELECT vendor_name, liability_expires, status, custom_fields FROM vendors WHERE status != 'do_not_use'`)
           .filter((v) => {
@@ -939,8 +1054,10 @@ export function getTeamDrilldown(key, quarter, propertyGroupScope = "configured"
         { key: "tenant_name", label: "Tenant" }, { key: "property_name", label: "Property" },
         { key: "unit", label: "Unit" }, { key: "insurance_company", label: "Carrier" },
         { key: "insurance_expiration", label: "Expires" }],
-        many(`SELECT tenant_name, property_name, unit, insurance_company, insurance_expiration
-              FROM tenant_insurance WHERE status = 'Current' ORDER BY CASE WHEN insurance_expiration = '' THEN 1 ELSE 0 END, insurance_expiration LIMIT ${LIM}`));
+        many(`SELECT ti.tenant_name, ti.property_name, ti.unit, ti.insurance_company, ti.insurance_expiration
+              FROM tenant_insurance ti LEFT JOIN properties p ON lower(trim(p.property_name)) = lower(trim(ti.property_name))
+              WHERE ti.status = 'Current'${group.sql}
+              ORDER BY CASE WHEN ti.insurance_expiration = '' THEN 1 ELSE 0 END, ti.insurance_expiration LIMIT ${LIM}`, group.params));
     default:
       return null;
   }

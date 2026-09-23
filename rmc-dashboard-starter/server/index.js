@@ -263,7 +263,11 @@ app.get("/api/drilldown/:key", async (req, res) => {
 });
 
 app.get("/api/property-groups", (_req, res) => {
-  res.json({ groups: query("SELECT id, label, source_field FROM property_groups ORDER BY label") });
+  res.json({ groups: query(`SELECT pg.id, CASE WHEN instr(pg.id, ':') > 0 THEN substr(pg.id, instr(pg.id, ':') + 1) ELSE pg.id END appfolio_id,
+    pg.label raw_label, pg.source_field,
+    COALESCE(NULLIF(pgc.display_name,''), pg.label) label
+    FROM property_groups pg LEFT JOIN property_group_config pgc ON pgc.group_id = pg.id
+    ORDER BY COALESCE(NULLIF(pgc.display_name,''), pg.label)`) });
 });
 
 // ── API: Labor adjustments (PTO + off-AppFolio billable hours per tech) ────
@@ -282,16 +286,18 @@ app.post("/api/labor-adjustments", requireSameOrigin, requireOwner, async (req, 
   try {
     const { period, tech, pto_hours, extra_hours } = req.body || {};
     if (!/^\d{4}-\d{2}$/.test(String(period || ""))) {
-      return res.status(400).json({ error: "period must be YYYY-MM" });
+      return res.status(400).json({ error: "Activity period must use YYYY-MM format." });
     }
     if (!tech || typeof tech !== "string" || !tech.trim()) {
-      return res.status(400).json({ error: "tech is required" });
+      return res.status(400).json({ error: "Technician name is required." });
     }
     const pto = Number(pto_hours);
     const extra = Number(extra_hours);
-    if (!Number.isFinite(pto) || pto < 0 || pto > 744 ||
-        !Number.isFinite(extra) || extra < 0 || extra > 744) {
-      return res.status(400).json({ error: "hours must be between 0 and 744" });
+    if (!Number.isFinite(pto) || pto < 0 || pto > 744) {
+      return res.status(400).json({ error: `PTO / Sick hours for ${tech.trim()} must be between 0 and 744.` });
+    }
+    if (!Number.isFinite(extra) || extra < 0 || extra > 744) {
+      return res.status(400).json({ error: `Other Billable hours for ${tech.trim()} must be between 0 and 744.` });
     }
     const { run } = await import("./lib/db.js");
     run(
@@ -341,7 +347,7 @@ app.post("/api/team/snapshot", requireSameOrigin, requireOwner, async (req, res)
   try {
     const { snapshotQuarter } = await import("./lib/kpi.js");
     const quarter = String((req.body && req.body.quarter) || "");
-    if (!/^\d{4}-Q[1-4]$/.test(quarter)) return res.status(400).json({ error: "quarter must be YYYY-QN" });
+    if (!/^\d{4}-Q[1-4]$/.test(quarter)) return res.status(400).json({ error: "Quarter must use YYYY-QN format." });
     res.json(snapshotQuarter(quarter, !!req.body.replaceExisting));
   } catch (err) {
     console.error("[api] Snapshot error:", err);
@@ -356,7 +362,12 @@ app.get("/api/team/config", requireOwner, async (req, res) => {
     seedKpiConfig();
     const configs = query("SELECT * FROM kpi_config ORDER BY department, sort").map((c) => ({ ...c, tiers: JSON.parse(c.tiers || "{}") }));
     const roster = query("SELECT * FROM kpi_roster ORDER BY sort").map((r) => ({ ...r, allocations: JSON.parse(r.allocations || "{}") }));
-    const propertyGroups = query("SELECT id, label, source_field FROM property_groups ORDER BY label");
+    const propertyGroups = query(`SELECT pg.id, CASE WHEN instr(pg.id, ':') > 0 THEN substr(pg.id, instr(pg.id, ':') + 1) ELSE pg.id END appfolio_id,
+      pg.label raw_label, pg.source_field,
+      COALESCE(NULLIF(pgc.display_name,''), pg.label) label,
+      COALESCE(pgc.display_name,'') display_name
+      FROM property_groups pg LEFT JOIN property_group_config pgc ON pgc.group_id = pg.id
+      ORDER BY COALESCE(NULLIF(pgc.display_name,''), pg.label)`);
     const vendorFields = new Set();
     query("SELECT custom_fields FROM vendors WHERE custom_fields != ''").forEach((r) => {
       try { Object.keys(JSON.parse(r.custom_fields || "{}")).forEach((k) => vendorFields.add(k)); } catch {}
@@ -376,15 +387,15 @@ app.post("/api/owner/settings", requireSameOrigin, requireOwner, async (req, res
     const { updateTeamSettings } = await import("./lib/kpi.js");
     const patch = req.body || {};
     if (patch.quarterly_incentive != null && (!Number.isFinite(Number(patch.quarterly_incentive)) || Number(patch.quarterly_incentive) < 0)) {
-      return res.status(400).json({ error: "quarterly_incentive must be a non-negative number" });
+      return res.status(400).json({ error: "Quarterly incentive must be a non-negative number." });
     }
     if (patch.stretch_bonus != null && (!Number.isFinite(Number(patch.stretch_bonus)) || Number(patch.stretch_bonus) < 0)) {
-      return res.status(400).json({ error: "stretch_bonus must be a non-negative number" });
+      return res.status(400).json({ error: "Stretch bonus must be a non-negative number." });
     }
     if (patch.tier_payouts != null) {
       const p = patch.tier_payouts;
       if (!["good", "better", "best"].every((k) => Number.isFinite(Number(p[k])) && Number(p[k]) >= 0 && Number(p[k]) <= 1)) {
-        return res.status(400).json({ error: "tier_payouts must contain Good, Better, and Best values from 0 to 1" });
+        return res.status(400).json({ error: "Good, Better, and Best payout percentages must each be between 0% and 100%." });
       }
     }
     if (patch.discretionary_questions != null &&
@@ -446,18 +457,24 @@ app.post("/api/owner/scorecard", requireSameOrigin, requireOwner, (req, res) => 
 
 app.post("/api/team/config", requireSameOrigin, requireOwner, async (req, res) => {
   try {
-    const { id, tiers, active } = req.body || {};
-    if (!id || typeof id !== "string") return res.status(400).json({ error: "id required" });
+    const { id, tiers, active, property_group_override } = req.body || {};
+    if (!id || typeof id !== "string") return res.status(400).json({ error: "KPI is required." });
     const { run, queryOne } = await import("./lib/db.js");
     const existing = queryOne("SELECT id, direction FROM kpi_config WHERE id = ?", [id]);
     if (!existing) return res.status(404).json({ error: "Unknown KPI: " + id });
+    if (property_group_override !== undefined) {
+      if (property_group_override !== null && typeof property_group_override !== "string")
+        return res.status(400).json({ error: "Property-group override must be a group ID or null (inherit global)." });
+      if (property_group_override && !query("SELECT id FROM property_groups WHERE id = ?", [property_group_override]).length)
+        return res.status(400).json({ error: "Selected KPI property group was not discovered in the verified AppFolio property directory." });
+    }
     if (tiers != null) {
       for (const t of ["good", "better", "best"]) {
         const tier = tiers[t] || {};
         if (tier.threshold != null && tier.threshold !== "" && !Number.isFinite(Number(tier.threshold)))
-          return res.status(400).json({ error: t + " threshold must be a number or empty" });
+          return res.status(400).json({ error: `${t[0].toUpperCase() + t.slice(1)} threshold for ${id} must be a number or empty.` });
         if (!Number.isFinite(Number(tier.payout || 0)) || Number(tier.payout || 0) < 0)
-          return res.status(400).json({ error: t + " payout must be a non-negative number" });
+          return res.status(400).json({ error: `${t[0].toUpperCase() + t.slice(1)} payout for ${id} must be a non-negative number.` });
       }
       const clean = {};
       for (const t of ["good", "better", "best"]) {
@@ -483,6 +500,29 @@ app.post("/api/team/config", requireSameOrigin, requireOwner, async (req, res) =
       run("UPDATE kpi_config SET tiers = ? WHERE id = ?", [JSON.stringify(clean), id]);
     }
     if (active != null) run("UPDATE kpi_config SET active = ? WHERE id = ?", [active ? 1 : 0, id]);
+    if (property_group_override !== undefined) {
+      run("UPDATE kpi_config SET property_group_override = ? WHERE id = ?", [property_group_override || null, id]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/team/property-group-label", requireSameOrigin, requireOwner, (req, res) => {
+  try {
+    const groupId = String(req.body?.group_id || "");
+    const displayName = String(req.body?.display_name || "").trim();
+    if (!groupId || !query("SELECT id FROM property_groups WHERE id = ?", [groupId]).length)
+      return res.status(400).json({ error: "Property group is missing or is not a discovered AppFolio group." });
+    if (!displayName) {
+      run("DELETE FROM property_group_config WHERE group_id = ?", [groupId]);
+    } else {
+      if (displayName.length > 100) return res.status(400).json({ error: "Property-group display name must be 100 characters or fewer." });
+      run(`INSERT INTO property_group_config (group_id, display_name, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(group_id) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at`,
+        [groupId, displayName, new Date().toISOString()]);
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -493,10 +533,10 @@ app.post("/api/team/config", requireSameOrigin, requireOwner, async (req, res) =
 app.post("/api/team/override", requireSameOrigin, requireOwner, async (req, res) => {
   try {
     const { quarter, employee, scheduled_hours } = req.body || {};
-    if (!/^\d{4}-Q[1-4]$/.test(String(quarter || ""))) return res.status(400).json({ error: "quarter must be YYYY-QN" });
-    if (!employee || typeof employee !== "string") return res.status(400).json({ error: "employee required" });
+    if (!/^\d{4}-Q[1-4]$/.test(String(quarter || ""))) return res.status(400).json({ error: "Quarter must use YYYY-QN format." });
+    if (!employee || typeof employee !== "string") return res.status(400).json({ error: "Employee name is required." });
     const h = Number(scheduled_hours);
-    if (!Number.isFinite(h) || h < 0 || h > 744) return res.status(400).json({ error: "scheduled_hours must be 0–744" });
+    if (!Number.isFinite(h) || h < 0 || h > 744) return res.status(400).json({ error: "Scheduled hours must be between 0 and 744." });
     const { run } = await import("./lib/db.js");
     if (h === 0) run("DELETE FROM team_overrides WHERE quarter = ? AND employee = ?", [quarter, employee.trim()]);
     else run(`INSERT INTO team_overrides (quarter, employee, scheduled_hours) VALUES (?, ?, ?)

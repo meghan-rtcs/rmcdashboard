@@ -1,0 +1,74 @@
+# Replit Prompt: RMC Dashboard - three items from client feedback
+
+Paste everything below the line into Replit. Handle the items in order. Item 1 is blocking a client rollout this week.
+
+---
+
+## Context
+
+The client reviewed the Team Performance build and came back with three items. Two are defects or gaps, one is an investigation I need answered before I change anything. The occupancy trend chart issue has already been resolved separately, so do not touch it.
+
+## Item 1: HTTP 403 when saving technician PTO / sick adjustments
+
+**What the client sees.** On the technician adjustments table (the row set showing WO Hours, PTO / Sick (h), Other Billable (h, from sheet), Billable, Available, Utilization for Scott Scott and Bong Manasan), he entered 64 into the PTO / Sick field for Scott, clicked Save Adjustments, and got a red inline message reading `Could not save: HTTP 403`. Nothing saved.
+
+**Investigate before changing anything.** A 403 means the request was rejected as unauthorized rather than failing validation, so the likely area is the authorization layer rather than the save logic. Things to check:
+
+- Which endpoint the Save Adjustments button calls, and what authorization that endpoint requires.
+- Whether that endpoint sits behind the Owner sign-in introduced with the Owner Bonus section, and whether that was intentional for this control. The PTO / sick adjustment fields are on the Team Performance tab, not the Owner Bonus tab, so the client would have no reason to expect a separate sign-in is required to use them.
+- Whether the client had ever completed owner password setup at the time, and whether the UI gives any indication that the control requires it.
+- Whether an owner session expires without the UI reflecting it, so the page still renders editable inputs after the session is gone.
+- Whether the CEO View session and the Owner session are being checked against each other incorrectly.
+
+**Do not** fix this by removing or loosening the authorization requirement on the endpoint. If the endpoint is correctly protected, the bug is that the UI lets someone type into fields they cannot save, and that is what needs fixing.
+
+**Report back:** the actual root cause in one plain sentence, which endpoint and which check rejected the request, and what you changed.
+
+## Item 2: Error messaging on failed saves
+
+Related to item 1 and worth doing regardless of what causes it.
+
+Any failed save that currently surfaces a raw status code should surface an actionable message instead. A 401 or 403 should say that the action requires signing in, and where to sign in. A 500 should say something went wrong and the change was not saved. A validation failure should say which field is the problem.
+
+Audit the other save actions on the Team Performance and Configure KPIs screens for the same pattern and fix them all, not just the one the client hit.
+
+Also: if a protected control is rendered to a user who is not authorized to save it, disable the inputs and show why, rather than letting them type and fail at submit.
+
+## Item 3: Property group scoping per KPI
+
+**What exists now.** There is an AppFolio property-group selector, and choosing a group sets which properties are bonus eligible across the whole calculation. Until a group is selected the dashboard uses all properties.
+
+**What the client needs.** He created an AppFolio property group called "Quality Turns" containing only the properties he wants counted in the clean move-ins KPI. Two of his clients handle their own unit turns and do subpar work, and he does not want his team penalized for buildings they do not control. Everything else should keep running against the full portfolio.
+
+So the group needs to scope a single KPI, not the whole calculation.
+
+**Build:**
+
+- Add an optional property-group override to each KPI's config record. Null means the KPI uses the global setting, which itself defaults to all properties. This must be settable from the Configure KPIs editor, not hardcoded.
+- Apply it wherever that KPI's value is computed and wherever its drilldown pulls records, so the drilldown shows exactly the properties that were counted. A KPI whose scope differs from the global setting should say so visibly on the tab, otherwise a number that looks wrong will have no explanation on screen.
+- Do not apply a KPI-level override retroactively to quarters that have already been snapshotted and locked.
+
+**Group naming.** AppFolio returns group IDs but not group names, so the selector currently shows entries like "AppFolio group 123." Add an editable display-name field per group ID, stored in config, so a group can be relabeled to "Quality Turns" once and stay labeled. Keep the raw ID visible somewhere in the editor so it can be matched back.
+
+I will supply the specific group ID once the client sends it. Build so that assigning it is a config change, not a code change.
+
+**Report back:** confirm which KPI you wired the override to, and how a drilldown indicates that a narrowed property set is in effect.
+
+## Item 4: Unpaid time off double-count audit - investigate only, change nothing
+
+There are now two places unpaid time can enter the utilization calculation:
+
+1. Rows in the Google Sheet labeled as unpaid time off, which currently count under the approved-hours rule.
+2. The PTO / Sick (h) field on the technician adjustments table, which the client is now using directly.
+
+The client is deciding how unpaid time should be treated, and that decision is not made yet.
+
+**What I need:** trace both paths through the utilization formula and tell me precisely where each one lands. Specifically, whether sheet rows labeled unpaid time off are being added to the billable numerator, subtracted from the available denominator, or both, and how that interacts with hours entered in the PTO / Sick field for the same period. Then tell me whether the same hours can currently be counted twice, and what the effect on a technician's utilization percentage would be if they were.
+
+**Do not change any classification logic, and do not reclassify unpaid time.** I need the answer before the client decides. Report findings only.
+
+## Sequencing
+
+Item 1 first, it is blocking. Item 2 alongside it. Item 3 next. Item 4 is read-only and can be done anytime, but I need the answer this week.
+
+Do not modify the occupancy trend chart. That issue is already resolved.
