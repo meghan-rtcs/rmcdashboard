@@ -6,7 +6,7 @@
 import { query, queryOne } from "./db.js";
 import { appfolio } from "./appfolio.js";
 import { occupancyHistory } from "./occupancy-history.js";
-
+import { getSheetSyncStatus } from "./sheets.js";
 const num = (v) => (v == null || isNaN(v) ? 0 : Number(v));
 const round = (v, d = 1) => {
   const f = Math.pow(10, d);
@@ -662,7 +662,17 @@ function buildOperations(range, propertyGroupScope = "configured") {
      )`
   ).c);
 
-  return { billableHours, moveInQuality, woAging, insurance, propertyGroup };
+  // Include sheet sync health so the Operations tab can show a failure banner
+  // immediately where the affected numbers appear (not only in the Team tab).
+  const sheetSync = getSheetSyncStatus();
+
+  return {
+    billableHours: { ...billableHours, sheetSync },
+    moveInQuality,
+    woAging,
+    insurance,
+    propertyGroup,
+  };
 }
 
 // ── Charts ──────────────────────────────────────────────────────────────────
@@ -1087,6 +1097,34 @@ function drillRegistry(range, propertyGroupScope = "configured") {
 
 // Returns a single drilldown { title, cols, rows } for the given key, or null.
 export async function getDrilldown(key, range, propertyGroupScope = "configured") {
+  // Audit view for Other Billable Hours sourced from Google Sheet.
+  // Uses the same date range as the surrounding Operations tab.
+  if (key === "sheet_hours") {
+    const [rs, re] = rangeBounds(range);
+    return {
+      title: "Other Billable Hours — Google Sheet",
+      cols: [
+        { key: "work_date", label: "Date" },
+        { key: "employee", label: "Employee" },
+        { key: "hours", label: "Hours" },
+        { key: "description", label: "Project / Description" },
+        { key: "property_unit", label: "Property / Unit" },
+        { key: "status", label: "Status" },
+        { key: "approved_by", label: "Approved By" },
+        { key: "approved_date", label: "Approved Date" },
+        { key: "notes", label: "Notes" },
+      ],
+      rows: many(
+        `SELECT work_date, employee, hours, description, property_unit,
+                CASE WHEN approved_by != '' THEN 'Approved (counted)' ELSE 'Pending (not counted)' END status,
+                approved_by, approved_date, notes
+         FROM sheet_billable_hours
+         WHERE work_date >= ? AND work_date < ?
+         ORDER BY work_date DESC LIMIT 500`,
+        [rs, re]
+      ),
+    };
+  }
   if (key === "income" || key === "grossIncome" || key === "netIncome") {
     const charts = await buildCharts();
     return {

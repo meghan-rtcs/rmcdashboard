@@ -555,6 +555,20 @@ app.post("/api/team/override", requireSameOrigin, requireOwner, async (req, res)
   }
 });
 
+// Pull only the Google Sheet so approved off-AppFolio hours can be refreshed
+// without waiting for the next full AppFolio sync.
+app.post("/api/sheet/sync", requireSameOrigin, async (_req, res) => {
+  try {
+    const { syncSheetHours } = await import("./lib/sheets.js");
+    const status = await syncSheetHours();
+    clearDashboardCache();
+    res.status(status.ok ? 200 : 502).json(status);
+  } catch (err) {
+    console.error("[api] Sheet sync error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Single-flight sync guard (shared by manual + scheduled triggers) ───────
 let syncPromise = null;
 function runSync() {

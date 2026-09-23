@@ -665,14 +665,26 @@
     }
 
     // ── Operations tab ──────────────────────────────────────────────────────
-    function TechHoursSection({ initial, ownerAuthorized, onOwnerExpired }) {
+    function TechHoursSection({ initial, ownerAuthorized, onOwnerExpired, onDrill }) {
       const [bh, setBh] = useState(initial);
       const [edits, setEdits] = useState({});
       const [saving, setSaving] = useState(false);
       const [savedAt, setSavedAt] = useState(null);
       const [err, setErr] = useState(null);
+      const [resyncing, setResyncing] = useState(false);
+      const [resyncErr, setResyncErr] = useState(null);
       useEffect(() => { setBh(initial); setEdits({}); }, [initial]);
 
+      const resyncSheet = () => {
+        setResyncing(true); setResyncErr(null);
+        fetch("/api/sheet/sync", { method: "POST" })
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then(() => fetch("/api/labor-adjustments?period=" + encodeURIComponent(bh.period)))
+          .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then((fresh) => { setBh(fresh); })
+          .catch((e) => setResyncErr(e.message))
+          .finally(() => setResyncing(false));
+      };
       const val = (tech, field, fallback) => {
         const e = edits[tech];
         return e && e[field] !== undefined ? e[field] : String(fallback ?? 0);
@@ -760,6 +772,33 @@
         <div>
           <SectionHeader title={"Maintenance Billable Hours · " + bh.label}
             subtitle={"Follows the selected Activity Period. Denominator: " + bh.workdays + " workdays × 8h = " + bh.baseHours + "h per tech, minus PTO. Approved Google Sheet hours are included automatically."} />
+
+          {/* Google Sheet sync status — always visible here since these numbers depend on it */}
+          {bh.sheetSync ? (
+            <div style={{ background: bh.sheetSync.ok ? C.bg : "rgba(176,42,42,0.07)", border: "1px solid " + (bh.sheetSync.ok ? C.border : "rgba(176,42,42,0.35)"), borderRadius: 9, padding: "9px 14px", fontSize: 12, color: bh.sheetSync.ok ? C.muted : C.red, marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              {bh.sheetSync.ok ? (
+                <span>📋 Other billable hours sheet synced {new Date(bh.sheetSync.at).toLocaleString()}
+                  {" — "}{fmt.num(bh.sheetSync.approvedHours || 0)}h approved (all time){bh.sheetSync.pendingHours ? ", " + fmt.num(bh.sheetSync.pendingHours) + "h pending (not counted)" : ""}
+                </span>
+              ) : (
+                <span>⚠ Google Sheet sync FAILED{bh.sheetSync.failedAt ? " " + new Date(bh.sheetSync.failedAt).toLocaleString() : ""} ({bh.sheetSync.error}) — utilization uses the last successful sheet read{bh.sheetSync.at ? " from " + new Date(bh.sheetSync.at).toLocaleString() : ""}.</span>
+              )}
+              <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                {onDrill ? (
+                  <button onClick={() => onDrill("sheet_hours")} style={{ background: "#fff", border: "1px solid " + C.border, borderRadius: 6, padding: "3px 10px", fontSize: 11.5, fontWeight: 600, color: C.muted, cursor: "pointer" }}>Audit entries</button>
+                ) : null}
+                <button onClick={resyncSheet} disabled={resyncing} style={{ background: "#fff", border: "1px solid " + C.border, borderRadius: 6, padding: "3px 10px", fontSize: 11.5, fontWeight: 600, color: C.muted, cursor: resyncing ? "default" : "pointer", opacity: resyncing ? 0.6 : 1 }}>{resyncing ? "Syncing…" : "Resync sheet"}</button>
+              </span>
+              {resyncErr ? <span style={{ width: "100%", color: C.red, fontSize: 11.5 }}>Resync failed: {resyncErr}</span> : null}
+            </div>
+          ) : (
+            <div style={{ background: "rgba(216,146,26,0.07)", border: "1px solid rgba(216,146,26,0.35)", borderRadius: 9, padding: "9px 14px", fontSize: 12, color: C.amber, marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>⚠ Google Sheet not synced yet — other billable hours will appear after the first sync.</span>
+              <button onClick={resyncSheet} disabled={resyncing} style={{ marginLeft: "auto", background: "#fff", border: "1px solid " + C.border, borderRadius: 6, padding: "3px 10px", fontSize: 11.5, fontWeight: 600, color: C.muted, cursor: resyncing ? "default" : "pointer", opacity: resyncing ? 0.6 : 1 }}>{resyncing ? "Syncing…" : "Sync now"}</button>
+              {resyncErr ? <span style={{ width: "100%", color: C.red, fontSize: 11.5 }}>Sync failed: {resyncErr}</span> : null}
+            </div>
+          )}
+
           <div style={gridAuto(200)}>
             <KpiCard big label="Billable Hours" value={fmt.num(bh.totalBillable)} unit="h"
               sub={fmt.num(bh.totalLogged) + "h AppFolio + " + fmt.num(bh.totalExtra) + "h approved sheet (" + fmt.num(bh.sheetRows) + " entries)"} drill="laborEntries" />
@@ -830,7 +869,7 @@
       );
     }
 
-    function OperationsTab({ d, rangeLabel, ownerAuthorized, onOwnerExpired }) {
+    function OperationsTab({ d, rangeLabel, ownerAuthorized, onOwnerExpired, onDrill }) {
       const ops = d.operations || {};
       const mi = ops.moveInQuality || {};
       const wa = ops.woAging || {};
@@ -838,7 +877,7 @@
       const groupScope = ops.propertyGroup || { available: true, label: "All properties" };
       return (
         <div>
-          {ops.billableHours ? <TechHoursSection initial={ops.billableHours} ownerAuthorized={ownerAuthorized} onOwnerExpired={onOwnerExpired} /> : null}
+          {ops.billableHours ? <TechHoursSection initial={ops.billableHours} ownerAuthorized={ownerAuthorized} onOwnerExpired={onOwnerExpired} onDrill={onDrill} /> : null}
 
           <SectionHeader title="Move-in Quality" subtitle={"Move-ins · " + rangeLabel + " · " + (groupScope.available ? "Bonus property group: " + groupScope.label : groupScope.label) + " · counts non-turnover work orders created within 30 days of move-in (unit turns, locks, blinds & make-ready excluded)"} />
           <div style={gridAuto(200)}>
@@ -1594,7 +1633,7 @@
                 <>
                   {tab === "dashboard" && <DashboardTab d={data.dashboard} rangeLabel={rangeLabel} />}
                   {tab === "leasing" && <LeasingTab d={data.dashboard} rangeLabel={rangeLabel} />}
-                  {tab === "operations" && <OperationsTab d={data.dashboard} rangeLabel={rangeLabel} ownerAuthorized={ownerAuthorized === true} onOwnerExpired={() => setOwnerAuthorized(false)} />}
+                  {tab === "operations" && <OperationsTab d={data.dashboard} rangeLabel={rangeLabel} ownerAuthorized={ownerAuthorized === true} onOwnerExpired={() => setOwnerAuthorized(false)} onDrill={openDrill} />}
                    {tab === "team" && <PasswordGate label="Team Performance"><TeamTab refreshKey={range + ":" + teamRefresh} propertyGroup={propertyGroup} ownerAuthorized={ownerAuthorized} onOwnerExpired={() => setOwnerAuthorized(false)} onConfigSaved={() => { refreshPropertyGroups(); load(); }} /></PasswordGate>}
                   {tab === "ceo" && <PasswordGate label="CEO View"><CeoTab d={data.dashboard} /></PasswordGate>}
                    {tab === "owner" && <OwnerScorecard ownerAuthorized={ownerAuthorized} onOwnerExpired={() => setOwnerAuthorized(false)} />}
