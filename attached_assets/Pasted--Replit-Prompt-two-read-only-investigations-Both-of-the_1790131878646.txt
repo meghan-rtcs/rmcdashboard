@@ -1,0 +1,42 @@
+# Replit Prompt: two read-only investigations
+
+Both of these are investigations. **Change nothing.** No settings, no calculations, no config, no published state. Report findings only.
+
+---
+
+## 1. Why does group 53 exclude nothing?
+
+You reported that Clean Move-ins is 59.1% both against all properties and against Quality Turns (group 53), because all 22 qualifying move-ins fall inside that group. Group 53 contains 142 properties.
+
+The client created this group specifically to exclude two clients who handle their own unit turns and do subpar work, so a group that excludes nothing means something is off.
+
+Tell me:
+
+- How many properties are in the full portfolio. If group 53 contains all or nearly all of them, the group itself is the problem and I need to tell the client.
+- Which properties are in the portfolio but **not** in group 53. List them by name and ID. That is the set the client believes he is excluding.
+- Whether any of those excluded properties had move-ins at all in Q3 2026, and in the trailing twelve months. If they had none in Q3 but had some historically, the scope is working and Q3 just happens not to show it, which is a very different answer than the group being misconfigured.
+- Which AppFolio field or report the group membership comes from, and whether a property can belong to more than one group.
+
+## 2. Clean Move-ins was reported as 66.7% earlier, now 59.1%
+
+Earlier in this build, Clean Move-ins for Q3 2026 was reported as 66.7%. It is now reported as 59.1%, at 13 of 22. Same quarter, same KPI.
+
+I need to know which number is correct and why it changed. Tell me:
+
+- Whether 66.7% was ever a correct reading of the served dashboard, or whether it came from a different calculation path, a different date range, a test fixture, or a local environment rather than live data.
+- Whether an AppFolio sync between then and now changed the underlying move-in records, and if so how many records moved and in which direction.
+- Whether any code change in this build altered how Clean Move-ins is computed, what counts as a move-in, what counts as clean, or the date window it uses.
+- What the value is **right now on the published site**, as opposed to in the workspace. If those differ, say so explicitly and give both numbers.
+
+That last point matters most. I need to know whether the figures you report to me match what the client sees when he opens the live dashboard, because he is showing this to his staff this week.
+
+## 3. Published state
+
+Separately, confirm plainly what is and is not live on the published site right now:
+
+- Is the per-KPI property scope control published?
+- Is the Quality Turns label and its assignment to Clean Move-ins published?
+- Are the owner sign-in and save-message fixes published?
+- List anything else completed in the workspace that has not been published.
+
+**Report back:** answers to the above, and nothing changed.
